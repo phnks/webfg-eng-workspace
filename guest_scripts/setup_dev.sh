@@ -76,7 +76,6 @@ else
     # chown -R $USERNAME:$USERNAME /home/$USERNAME/.ssh
     # chmod 700 /home/$USERNAME/.ssh
     # chmod 600 /home/$USERNAME/.ssh/authorized_keys
-
     # --- User-specific setup ---
     echo ">>> Performing user-specific setup for $USERNAME..."
 
@@ -93,7 +92,6 @@ else
     else
         echo "Warning: google-chrome.desktop not found. Cannot set default browser."
     fi
-
 fi
 
 # Clean up apt cache
