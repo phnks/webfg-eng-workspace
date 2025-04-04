@@ -1,15 +1,10 @@
 #!/bin/bash
 
 # Script to create or re-provision VMs for all users listed in a config file.
-
-# Exit immediately if a command exits with a non-zero status.
-# We might want to remove this if we want the script to continue with other users
-# even if one fails. Let's keep it for now for stricter error checking.
-set -e
+# Allows continuing to next user if one fails.
 
 CONFIG_FILE="config/dev_users.txt"
-CREATE_SCRIPT="./host_scripts/create_dev_vm.sh"
-REPROVISION_SCRIPT="./host_scripts/reprovision_vm.sh"
+START_SCRIPT="./host_scripts/start_vm.sh" # Needed to start before provision
 
 # Check if config file exists
 if [ ! -f "$CONFIG_FILE" ]; then
@@ -17,13 +12,9 @@ if [ ! -f "$CONFIG_FILE" ]; then
   exit 1
 fi
 
-# Check if helper scripts exist and are executable
-if [ ! -x "$CREATE_SCRIPT" ]; then
-    echo "Error: Create script '$CREATE_SCRIPT' not found or not executable."
-    exit 1
-fi
-if [ ! -x "$REPROVISION_SCRIPT" ]; then
-    echo "Error: Reprovision script '$REPROVISION_SCRIPT' not found or not executable."
+# Check if helper script exists and is executable
+if [ ! -x "$START_SCRIPT" ]; then
+    echo "Error: Start script '$START_SCRIPT' not found or not executable."
     exit 1
 fi
 
@@ -42,24 +33,56 @@ grep -v '^#' "$CONFIG_FILE" | grep -v '^[[:space:]]*$' | while IFS= read -r USER
 
   echo ">>> Processing user: $USERNAME"
   VM_NAME="dev-${USERNAME}-vm"
+  VAGRANT_ID_FILE=".vagrant/machines/default/virtualbox/id" # Default path
 
   # Check if VM exists using VBoxManage
   if VBoxManage showvminfo "$VM_NAME" --machinereadable > /dev/null 2>&1; then
+    # VM Exists in VirtualBox
     echo "VM '$VM_NAME' exists. Running re-provisioning..."
-    if ! "$REPROVISION_SCRIPT" "$USERNAME"; then
-        echo "Error: Failed to re-provision VM for user '$USERNAME'. Stopping script due to 'set -e'."
-        # If 'set -e' was removed, we could just 'continue' here.
-        exit 1 # Stop script on failure
+
+    # Check state, start if needed
+    VM_STATE=$(VBoxManage showvminfo "$VM_NAME" --machinereadable | grep VMState= | cut -d'=' -f2 | tr -d '"')
+    if [ "$VM_STATE" != "running" ]; then
+        echo "VM not running (state: '$VM_STATE'). Attempting to start..."
+        if ! "$START_SCRIPT" "$USERNAME"; then
+             echo "Error: Failed to start VM '$VM_NAME' for provisioning. Skipping user '$USERNAME'."
+             echo "--------------------------------------------------"
+             continue # Skip to next user
+        fi
+        echo "VM started. Waiting 5 seconds before provisioning..."
+        sleep 5 # Give VM time to boot
     fi
-    echo "Re-provisioning finished for '$USERNAME'."
+
+    # Run vagrant provision directly
+    echo "Running vagrant provision for $USERNAME..."
+    if ! DEV_USERNAME="$USERNAME" vagrant provision; then
+        echo "Error: Failed to re-provision VM for user '$USERNAME'."
+        # Loop will continue to next user
+    else
+        echo "Re-provisioning finished for '$USERNAME'."
+    fi
+
   else
+    # VM Does NOT Exist in VirtualBox
     echo "VM '$VM_NAME' does not exist. Running creation..."
-    if ! "$CREATE_SCRIPT" "$USERNAME"; then
-         echo "Error: Failed to create VM for user '$USERNAME'. Stopping script due to 'set -e'."
-         # If 'set -e' was removed, we could just 'continue' here.
-         exit 1 # Stop script on failure
+
+    # Check if Vagrant *thinks* a machine exists for this directory and remove state if it does
+    if [ -f "$VAGRANT_ID_FILE" ]; then
+        STORED_ID=$(cat "$VAGRANT_ID_FILE")
+        echo "Warning: Vagrant state file found ($VAGRANT_ID_FILE) pointing to ID '$STORED_ID', but target VM '$VM_NAME' does not exist in VirtualBox."
+        echo "Removing Vagrant state file to ensure correct VM creation..."
+        rm -f "$VAGRANT_ID_FILE"
+        # Optionally remove the whole directory: rm -rf "$(dirname "$VAGRANT_ID_FILE")"
     fi
-    echo "Creation finished for '$USERNAME'."
+
+    # Now run vagrant up
+    echo "Running vagrant up for $USERNAME..."
+    if ! DEV_USERNAME="$USERNAME" vagrant up --provider=virtualbox; then
+         echo "Error: Failed to create VM for user '$USERNAME'."
+         # Loop will continue to next user
+    else
+        echo "Creation finished for '$USERNAME'."
+    fi
   fi
   echo "--------------------------------------------------"
 

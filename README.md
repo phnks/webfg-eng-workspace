@@ -95,7 +95,17 @@ A set of scripts are provided in `host_scripts/` to manage individual VMs by use
     *   Execute the script: `./host_scripts/manage_all_vms.sh`
     *   The script will iterate through each username in `config/dev_users.txt`.
     *   For each user:
-        *   It checks if a VM named `dev-<username>-vm` exists.
-        *   If the VM **exists**, it runs `./host_scripts/reprovision_vm.sh <username>` to apply the latest `guest_scripts/setup_dev.sh`.
-        *   If the VM **does not exist**, it runs `./host_scripts/create_dev_vm.sh <username>` to create and provision it for the first time.
-    *   **Note:** The script uses `set -e`, meaning it will stop immediately if any step fails for any user.
+        *   It checks if a VM named `dev-<username>-vm` exists in VirtualBox.
+        *   If the VM **exists**, it ensures the VM is running (starting it if necessary) and then runs `vagrant provision` to apply the latest `guest_scripts/setup_dev.sh`.
+        *   If the VM **does not exist**, it clears any potentially stale Vagrant state for the directory and runs `vagrant up` to create and provision the VM.
+    *   **Note:** This script attempts to continue processing other users if an error occurs for one user.
+
+3.  **Other Bulk Operations:**
+    *   Ensure the scripts are executable: `chmod +x host_scripts/*_all_vms.sh`
+    *   **Start/Resume All VMs:** `./host_scripts/start_all_vms.sh`
+        *   Iterates through `config/dev_users.txt` and runs `start_vm.sh` for each user.
+    *   **Stop All VMs (Graceful):** `./host_scripts/stop_all_vms.sh`
+        *   Iterates through `config/dev_users.txt` and runs `stop_vm.sh` for each user.
+    *   **Save State for All VMs:** `./host_scripts/savestate_all_vms.sh`
+        *   Iterates through `config/dev_users.txt` and runs `savestate_vm.sh` for each user.
+    *   **Note:** These bulk start/stop/savestate scripts also attempt to continue processing other users if an error occurs for one user. They report a summary of successes and failures at the end.
