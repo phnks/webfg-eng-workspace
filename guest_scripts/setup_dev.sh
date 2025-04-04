@@ -28,8 +28,29 @@ apt-get install -y xubuntu-desktop lightdm
 # Ensure LightDM is the default display manager (usually handled by install, but good to be sure)
 # dpkg-reconfigure lightdm # This might still be interactive, skip for now
 
-echo ">>> Installing common development tools..."
-apt-get install -y git vim curl build-essential net-tools openssh-server
+echo ">>> Installing common development tools and dependencies..."
+# Add wget, gpg for adding external repos, apt-transport-https for https sources
+apt-get install -y git vim curl build-essential net-tools openssh-server wget gpg apt-transport-https
+
+# --- Install Google Chrome ---
+echo ">>> Installing Google Chrome..."
+# Add Google Chrome key (use --batch --yes for non-interactive gpg)
+wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor --batch --yes -o /usr/share/keyrings/google-chrome-keyring.gpg
+# Add Google Chrome repository
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
+# Update package list and install Chrome
+apt-get update -y
+apt-get install -y google-chrome-stable
+
+# --- Install Visual Studio Code ---
+echo ">>> Installing Visual Studio Code..."
+# Add Microsoft GPG key (use --batch --yes for non-interactive gpg)
+wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor --batch --yes > /usr/share/keyrings/packages.microsoft.gpg
+# Add VS Code repository
+echo "deb [arch=amd64,arm64,armhf signed-by=/usr/share/keyrings/packages.microsoft.gpg] https://packages.microsoft.com/repos/code stable main" > /etc/apt/sources.list.d/vscode.list
+# Update package list and install VS Code
+apt-get update -y
+apt-get install -y code
 
 echo ">>> Creating user: $USERNAME ..."
 if id "$USERNAME" &>/dev/null; then
@@ -55,6 +76,22 @@ else
     # chown -R $USERNAME:$USERNAME /home/$USERNAME/.ssh
     # chmod 700 /home/$USERNAME/.ssh
     # chmod 600 /home/$USERNAME/.ssh/authorized_keys
+    # --- User-specific setup ---
+    echo ">>> Performing user-specific setup for $USERNAME..."
+
+    # Install VS Code extension (Cline) as the user
+    # Need to run this as the user, ensuring HOME is set correctly
+    echo "Installing VS Code Cline extension for $USERNAME..."
+    sudo -i -u "$USERNAME" bash -c 'code --install-extension SaoudRizwan.cline --force' || echo "VS Code extension install failed (maybe first run before code path is set?)"
+
+    # Set default browser (best effort during provisioning)
+    echo "Attempting to set Google Chrome as default browser for $USERNAME..."
+    # Ensure the .desktop file exists first
+    if [ -f /usr/share/applications/google-chrome.desktop ]; then
+        sudo -i -u "$USERNAME" bash -c 'xdg-settings set default-web-browser google-chrome.desktop' || echo "Failed to set default browser via xdg-settings."
+    else
+        echo "Warning: google-chrome.desktop not found. Cannot set default browser."
+    fi
 fi
 
 # Clean up apt cache
@@ -64,8 +101,9 @@ echo ">>> Provisioning complete for user: $USERNAME"
 echo ">>> You should be able to log in via the GUI with username '$USERNAME' and password 'password'."
 echo ">>> IMPORTANT: Change the default password immediately after login!"
 
-# Optional: Reboot if major changes like kernel updates happened, though usually not needed for desktop install
-# echo ">>> Rebooting VM..."
-# reboot
+# Reboot to ensure GUI starts correctly after installation
+echo ">>> Rebooting VM in 5 seconds..."
+sleep 5
+reboot
 
 exit 0

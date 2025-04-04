@@ -50,8 +50,10 @@ cd .. # Return to project root
         *   Download the necessary Vagrant base box (`ubuntu/noble64`) if not already present.
         *   Create a new VirtualBox VM named `dev-<developer_username>-vm`.
         *   Boot the VM.
-        *   Run the `setup_dev.sh` script inside the VM to install the Xubuntu desktop environment, common tools, and create the specified user (`<developer_username>`).
-        *   A VirtualBox window displaying the VM's desktop login screen should appear.
+    *   Run the `setup_dev.sh` script inside the VM to install the Xubuntu desktop environment, common tools (git, vim, curl, etc.), Google Chrome, Visual Studio Code (with the Cline extension), and create the specified user (`<developer_username>`).
+    *   The script attempts to set Google Chrome as the default browser.
+    *   The VM will automatically reboot after provisioning.
+    *   A VirtualBox window displaying the VM's desktop login screen should appear after the reboot.
 
 3.  **Login:**
     The developer can log into the Xubuntu VM using:
@@ -60,12 +62,40 @@ cd .. # Return to project root
 
     **IMPORTANT:** The developer MUST change this default password immediately after their first login for security reasons!
 
-## Managing the VM
+## Managing Individual VMs
 
-Use standard Vagrant commands from the `webfg-eng-workspace` directory:
+A set of scripts are provided in `host_scripts/` to manage individual VMs by username, using `VBoxManage` directly. Make sure they are executable (`chmod +x host_scripts/*.sh`). Replace `<username>` with the target developer's username (e.g., `jsmith`).
 
-*   **Stop the VM:** `vagrant halt`
-*   **Start the VM (without provisioning):** `vagrant up` (if already created)
-*   **Restart the VM (and re-run provisioner if needed):** `vagrant reload` or `vagrant reload --provision`
-*   **SSH into the VM (command line):** `vagrant ssh` (connects as the default `vagrant` user)
-*   **Destroy the VM (delete it completely):** `vagrant destroy` (use with caution!)
+*   **Start/Resume VM:** `./host_scripts/start_vm.sh <username>`
+    *   Starts the VM if powered off.
+    *   Resumes the VM if its state was previously saved.
+*   **Stop VM (Graceful Shutdown):** `./host_scripts/stop_vm.sh <username>`
+    *   Sends an ACPI shutdown signal.
+*   **Restart VM (Graceful):** `./host_scripts/restart_vm.sh <username>`
+    *   Gracefully stops, then starts the VM.
+*   **Save VM State:** `./host_scripts/savestate_vm.sh <username>`
+    *   Suspends the VM and saves its current state to disk. Faster than shutdown, allows quick resume.
+*   **Restart VM (via Save State):** `./host_scripts/restart_savestate_vm.sh <username>`
+    *   Saves the VM state, then immediately resumes it. Useful for quick "restarts" without a full OS boot cycle if needed.
+*   **Re-run Provisioning:** `./host_scripts/reprovision_vm.sh <username>`
+    *   Re-runs the `guest_scripts/setup_dev.sh` script inside the specified user's *running* VM. Useful for applying updates made to the setup script. The VM must be running (the script will attempt to start it if it's not). The VM will reboot at the end of provisioning.
+*   **SSH into the VM (command line):** `DEV_USERNAME=<username> vagrant ssh`
+    *   Connects as the default `vagrant` user. Requires the `DEV_USERNAME` environment variable to target the correct VM if multiple exist.
+*   **Destroy the VM (delete it completely):** `DEV_USERNAME=<username> vagrant destroy`
+    *   Use with caution! Requires the `DEV_USERNAME` environment variable.
+
+## Managing All VMs (Bulk Operations)
+
+1.  **Configure User List:**
+    *   Edit the `config/dev_users.txt` file.
+    *   Add one developer username per line. Lines starting with `#` and empty lines are ignored.
+
+2.  **Run the Management Script:**
+    *   Ensure the script is executable: `chmod +x host_scripts/manage_all_vms.sh`
+    *   Execute the script: `./host_scripts/manage_all_vms.sh`
+    *   The script will iterate through each username in `config/dev_users.txt`.
+    *   For each user:
+        *   It checks if a VM named `dev-<username>-vm` exists.
+        *   If the VM **exists**, it runs `./host_scripts/reprovision_vm.sh <username>` to apply the latest `guest_scripts/setup_dev.sh`.
+        *   If the VM **does not exist**, it runs `./host_scripts/create_dev_vm.sh <username>` to create and provision it for the first time.
+    *   **Note:** The script uses `set -e`, meaning it will stop immediately if any step fails for any user.
