@@ -109,3 +109,66 @@ A set of scripts are provided in `host_scripts/` to manage individual VMs by use
     *   **Save State for All VMs:** `./host_scripts/savestate_all_vms.sh`
         *   Iterates through `config/dev_users.txt` and runs `savestate_vm.sh` for each user.
     *   **Note:** These bulk start/stop/savestate scripts also attempt to continue processing other users if an error occurs for one user. They report a summary of successes and failures at the end.
+
+## Developer Chat Feature (`devchat`)
+
+This setup includes a CLI tool (`devchat`) within each VM that allows developers to send messages to and receive replies from a designated admin via Discord DMs.
+
+### Architecture
+
+*   **Multiple Discord Bots:** One bot application per developer (e.g., `testuser-bot`, `anum-bot`) must be created in the Discord Developer Portal.
+*   **Host Service:** A Node.js service (`host_service/index.js`) runs on the **host machine**. It securely stores all bot tokens and relays messages between the VMs and Discord.
+*   **CLI Tool:** A Node.js script (`vm_cli/devchat.js`) is installed as `devchat` inside each VM.
+
+### Host Service Setup
+
+1.  **Create Discord Bots:**
+    *   Go to the [Discord Developer Portal](https://discord.com/developers/applications).
+    *   Create a new application/bot for **each** developer username listed in `config/dev_users.txt`. Name them clearly (e.g., `jsmith-bot`).
+    *   In the "Bot" tab for each bot, enable the **Message Content Intent** under Privileged Gateway Intents.
+    *   Reset and copy the **Token** for each bot.
+    *   Invite each bot to your Discord server or ensure they can DM you.
+2.  **Get Admin User ID:**
+    *   Enable Developer Mode in Discord settings (Advanced).
+    *   Right-click your username and "Copy User ID" (or use the `\@YourUsername` mention trick).
+3.  **Configure Environment:**
+    *   Navigate to the `host_service` directory.
+    *   Copy the template file: `cp .env.template .env`
+    *   Edit the `.env` file with a text editor.
+    *   Fill in your `ADMIN_DISCORD_ID`.
+    *   Fill in the `BOT_TOKEN_<username>` for each developer listed in `config/dev_users.txt`. Make sure the usernames match exactly.
+    *   Save the `.env` file. **Do not commit this file to Git.**
+4.  **Install Dependencies:**
+    ```bash
+    cd host_service
+    npm install
+    cd ..
+    ```
+5.  **Run the Service:**
+    ```bash
+    node host_service/index.js
+    ```
+    Keep this service running on the host machine. You might want to use a process manager like `pm2` or `nodemon` for development/production.
+
+### Using `devchat` in the VM
+
+Once a VM is provisioned and the host service is running:
+
+1.  **Log into the VM.**
+2.  **Send a message:**
+    *   To the admin (configured via `ADMIN_DISCORD_ID`):
+        ```bash
+        devchat send @admin "Hello, I need help with..."
+        ```
+        (You can also use the admin's actual Discord User ID instead of `@admin`)
+    *   The message will appear in Discord as a DM from the bot associated with the VM's user (e.g., `anum-bot`).
+3.  **Receive messages:**
+    ```bash
+    devchat receive
+    ```
+    *   This checks for any new DMs sent *by the admin* directly *to the specific bot* associated with the VM user.
+
+### Replying (Admin Workflow)
+
+*   When you receive a DM from `testuser-bot`, simply reply directly to `testuser-bot` in Discord.
+*   When `testuser` runs `devchat receive` in their VM, they will see your reply.

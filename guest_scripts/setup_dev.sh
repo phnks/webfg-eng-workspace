@@ -94,6 +94,40 @@ else
     fi
 fi
 
+# --- Install Node.js and npm ---
+echo ">>> Installing Node.js and npm..."
+# Check if Node.js is installed, install if not (using nodesource setup)
+if ! command -v node &> /dev/null; then
+    echo "Node.js not found, installing..."
+    # Use nodesource setup script for a recent version (e.g., Node 20 LTS)
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    apt-get install -y nodejs
+else
+    echo "Node.js already installed: $(node -v)"
+fi
+# Ensure npm is available (usually comes with nodejs package)
+if ! command -v npm &> /dev/null; then
+    echo "npm not found, installing..."
+    apt-get install -y npm # Or consider reinstalling nodejs package
+else
+     echo "npm already installed: $(npm -v)"
+fi
+
+
+# --- Install devchat CLI tool ---
+echo ">>> Installing devchat CLI tool..."
+# Copy the script from the synced folder (assuming /vagrant is the default sync)
+# to /usr/local/bin for system-wide access
+if [ -f /vagrant/vm_cli/devchat.js ]; then
+    cp /vagrant/vm_cli/devchat.js /usr/local/bin/devchat
+    chmod +x /usr/local/bin/devchat
+    echo "devchat installed to /usr/local/bin/devchat"
+else
+    echo "Warning: /vagrant/vm_cli/devchat.js not found. Cannot install devchat tool."
+    echo "Ensure the vm_cli directory is present in the project root."
+fi
+
+
 # Clean up apt cache
 apt-get clean
 

@@ -25,16 +25,18 @@ if ! VBoxManage showvminfo "$VM_NAME" --machinereadable > /dev/null 2>&1; then
 fi
 
 # Optional: Check if the VM is running, as 'vagrant provision' typically requires it
+# Use VBoxManage first for a quick check, then confirm with vagrant up if needed
 VM_STATE=$(VBoxManage showvminfo "$VM_NAME" --machinereadable | grep VMState= | cut -d'=' -f2 | tr -d '"')
 if [ "$VM_STATE" != "running" ]; then
-    echo "Warning: VM '$VM_NAME' is not running (state: '$VM_STATE')."
-    echo "Attempting to start it first using './host_scripts/start_vm.sh $DEV_USERNAME'..."
-    if ! ./host_scripts/start_vm.sh "$DEV_USERNAME"; then
-        echo "Error: Failed to start VM '$VM_NAME'. Cannot proceed with provisioning."
-        exit 1
-    fi
-    echo "VM started. Proceeding with provisioning..."
-    sleep 5 # Give VM a moment to boot fully before provisioning
+    echo "VM '$VM_NAME' is not running (state: '$VM_STATE'). Attempting to start it using 'vagrant up'..."
+    # Use vagrant up to start the VM, ensuring Vagrant knows its state.
+     # Pass DEV_USERNAME to ensure it targets the correct VM if state is ambiguous.
+     if ! DEV_USERNAME="$DEV_USERNAME" vagrant up --provider=virtualbox; then
+         echo "Error: Failed to start VM '$VM_NAME' using 'vagrant up'. Cannot proceed with provisioning."
+         exit 1 # Exit if starting fails
+     fi
+     echo "VM started via 'vagrant up'. Waiting 45 seconds for SSH to become ready..."
+     sleep 45 # Give SSH time to become ready after boot
 fi
 
 
