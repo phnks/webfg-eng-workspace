@@ -23,6 +23,7 @@ echo ">>> Ensuring VM for user '$DEV_USERNAME' exists and is running..."
 # 2. Start the VM if it exists but is stopped.
 # 3. Do nothing if the VM is already running.
 # We now pass $DEV_USERNAME as the machine name argument to vagrant
+# Use sudo -E to ensure consistency with how VMs might have been created/managed
 if ! DEV_USERNAME="$DEV_USERNAME" sudo -E vagrant up "$DEV_USERNAME" --provider=virtualbox; then
     echo ""
     echo "Error: 'sudo -E vagrant up $DEV_USERNAME' failed for VM '$VM_NAME'. Cannot proceed."
