@@ -34,17 +34,8 @@ grep -v '^#' "$CONFIG_FILE" | grep -v '^[[:space:]]*$' | while IFS= read -r USER
   fi
 
   echo ">>> Processing user: $USERNAME"
-  VM_NAME="dev-${USERNAME}-vm"
 
-  # Check if VM exists using VBoxManage first
-  if ! VBoxManage showvminfo "$VM_NAME" --machinereadable > /dev/null 2>&1; then
-    echo "VM '$VM_NAME' not found. Skipping."
-    FAIL_COUNT=$((FAIL_COUNT + 1)) # Count not found as a failure/skip
-    echo "--------------------------------------------------"
-    continue
-  fi
-
-  # Attempt to stop the VM
+  # Attempt to stop the VM using the stop_vm.sh script (which now uses vagrant halt)
   if "$STOP_SCRIPT" "$USERNAME"; then
     echo "Stop command finished for '$USERNAME'."
     SUCCESS_COUNT=$((SUCCESS_COUNT + 1))

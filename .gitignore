@@ -1,1 +1,15 @@
 .vagrant
+# Ignore node_modules directory
+node_modules/
+
+# Ignore .env file containing secrets
+.env
+
+# Ignore log files (if any are created later)
+*.log
+
+# Ignore OS-specific files
+.DS_Store
+Thumbs.db
+
+*.pid

@@ -24,11 +24,12 @@ echo ">>> Updating package lists (including Oracle VirtualBox repo)..."
 apt-get update -y
 
 echo ""
-echo ">>> Installing/Updating VirtualBox (target: virtualbox-7.0)..."
-# Attempt to install virtualbox-7.0 from the Oracle repository
-# This should pull the correct dependencies for the host system (incl. Python 3.10+)
-apt-get install -y virtualbox-7.0
-echo "VirtualBox 7.0 installation attempted."
+# Ensure headers for the *currently running* kernel AND the generic (latest) headers are installed
+CURRENT_KERNEL=$(uname -r)
+echo ">>> Installing/Updating VirtualBox, DKMS, and kernel headers (target: virtualbox virtualbox-dkms linux-headers-generic linux-headers-$CURRENT_KERNEL)..."
+# Attempt to install virtualbox, dkms support, and kernel headers for current and latest kernels
+apt-get install -y virtualbox virtualbox-dkms linux-headers-generic "linux-headers-$CURRENT_KERNEL"
+echo "VirtualBox, DKMS, and kernel headers installation attempted."
 echo "Verifying installation:"
 VBoxManage --version || echo "VBoxManage command not found after installation attempt."
 
@@ -44,6 +45,8 @@ echo ">>> Removing potentially conflicting old Vagrant versions (if any)..."
 apt-get remove -y vagrant vagrant-libvirt || true
 
 echo ">>> Adding HashiCorp GPG key..."
+# Remove existing key file first to avoid conflicts/errors
+rm -f /usr/share/keyrings/hashicorp-archive-keyring.gpg
 wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
 # Ensure the key file is readable by apt
 chmod 644 /usr/share/keyrings/hashicorp-archive-keyring.gpg
@@ -60,6 +63,10 @@ apt-get install -y vagrant
 echo "Vagrant installation attempted."
 echo "Verifying installation:"
 vagrant --version || echo "Vagrant command not found after installation attempt."
+
+echo ""
+echo ">>> Reconfiguring virtualbox-dkms to build modules for the current kernel..."
+dpkg-reconfigure virtualbox-dkms || echo "!!! dpkg-reconfigure virtualbox-dkms failed. Check build logs."
 
 echo ""
 echo ">>> Admin setup script finished."

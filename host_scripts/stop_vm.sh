@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Script to gracefully stop a specific developer VM using VBoxManage
+# Script to gracefully stop a specific developer VM using Vagrant
 
 # Check if username is provided
 if [ -z "$1" ]; then
@@ -9,52 +9,20 @@ if [ -z "$1" ]; then
 fi
 
 USERNAME=$1
-VM_NAME="dev-${USERNAME}-vm"
+DEV_USERNAME=$1
+VM_NAME="dev-${DEV_USERNAME}-vm" # Used for messaging
 
-echo ">>> Attempting to stop VM: $VM_NAME..."
+echo ">>> Attempting to gracefully stop VM for user '$DEV_USERNAME' using 'vagrant halt'..."
 
-# Check if VM exists
-if ! VBoxManage showvminfo "$VM_NAME" --machinereadable > /dev/null 2>&1; then
-  echo "Error: VM '$VM_NAME' not found."
-  exit 1
-fi
-
-# Check if VM is running
-VM_STATE=$(VBoxManage showvminfo "$VM_NAME" --machinereadable | grep VMState= | cut -d'=' -f2 | tr -d '"')
-
-if [ "$VM_STATE" != "running" ]; then
-  echo "VM '$VM_NAME' is not currently running (state: '$VM_STATE')."
-  # Consider it a success if it's already stopped
-  exit 0
-fi
-
-# Send ACPI shutdown signal (graceful shutdown)
-echo "Sending ACPI shutdown signal to VM '$VM_NAME'..."
-VBoxManage controlvm "$VM_NAME" acpipowerbutton
-
-# Wait for the VM to power off (optional, but good for feedback)
-TIMEOUT=60 # seconds
-echo "Waiting up to $TIMEOUT seconds for VM to power off..."
-COUNT=0
-while [ "$VM_STATE" == "running" ] && [ $COUNT -lt $TIMEOUT ]; do
-  sleep 1
-  VM_STATE=$(VBoxManage showvminfo "$VM_NAME" --machinereadable | grep VMState= | cut -d'=' -f2 | tr -d '"')
-  COUNT=$((COUNT + 1))
-  echo -n "."
-done
-echo "" # Newline after dots
-
-# Final check
-VM_STATE=$(VBoxManage showvminfo "$VM_NAME" --machinereadable | grep VMState= | cut -d'=' -f2 | tr -d '"')
-if [ "$VM_STATE" == "poweroff" ]; then
-  echo "VM '$VM_NAME' stopped successfully."
-  exit 0
-elif [ "$VM_STATE" == "running" ]; then
-  echo "Error: VM '$VM_NAME' did not stop within $TIMEOUT seconds."
-  echo "You may need to force power off using: VBoxManage controlvm '$VM_NAME' poweroff"
-  exit 1
+# Run vagrant halt. This will:
+# 1. Send an ACPI shutdown signal if the VM is running.
+# 2. Do nothing if the VM is already stopped.
+# 3. Fail if the VM doesn't exist or Vagrant doesn't know about it.
+# Pass $DEV_USERNAME as the machine name argument
+if DEV_USERNAME="$DEV_USERNAME" sudo -E vagrant halt "$DEV_USERNAME"; then
+  echo "VM for '$DEV_USERNAME' stopped successfully or was already stopped."
 else
-  echo "VM '$VM_NAME' is now in state '$VM_STATE'."
-  # Consider other states like 'saved' or 'aborted' as potentially stopped for this script's purpose
+  echo "Error: Failed to stop VM for '$DEV_USERNAME' using 'vagrant halt'."
+  echo "Ensure the VM exists and Vagrant is aware of it."
   exit 0
 fi

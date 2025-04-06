@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Script to start a specific developer VM using VBoxManage
+# Script to start a specific developer VM using Vagrant
 
 # Check if username is provided
 if [ -z "$1" ]; then
@@ -9,36 +9,21 @@ if [ -z "$1" ]; then
 fi
 
 USERNAME=$1
-VM_NAME="dev-${USERNAME}-vm"
+DEV_USERNAME=$1
+VM_NAME="dev-${DEV_USERNAME}-vm" # Used for messaging
 
-echo ">>> Attempting to start VM: $VM_NAME..."
+echo ">>> Attempting to start VM for user '$DEV_USERNAME' using 'vagrant up'..."
 
-# Check if VM exists
-if ! VBoxManage showvminfo "$VM_NAME" --machinereadable > /dev/null 2>&1; then
-  echo "Error: VM '$VM_NAME' not found."
-  echo "Make sure the VM was created first (e.g., using 'DEV_USERNAME=$USERNAME vagrant up')."
-  exit 1
-fi
-
-# Check if VM is already running
-VM_STATE=$(VBoxManage showvminfo "$VM_NAME" --machinereadable | grep VMState= | cut -d'=' -f2 | tr -d '"')
-
-if [ "$VM_STATE" == "running" ]; then
-  echo "VM '$VM_NAME' is already running."
-  exit 0
-elif [ "$VM_STATE" != "poweroff" ] && [ "$VM_STATE" != "saved" ] && [ "$VM_STATE" != "aborted" ]; then
-  echo "Error: VM '$VM_NAME' is in an unexpected state ('$VM_STATE'). Cannot start."
-  exit 1
-fi
-
-# Start the VM (headless mode is often preferred for servers, but GUI was enabled in Vagrantfile)
-# Use --type gui to match the Vagrantfile setting
-VBoxManage startvm "$VM_NAME" --type gui
-
-if [ $? -eq 0 ]; then
-  echo "VM '$VM_NAME' started successfully."
+# Run vagrant up. This will:
+# 1. Start the VM if it exists but is stopped or saved.
+# 2. Do nothing if the VM is already running.
+# 3. Fail if the VM doesn't exist (it won't create it here, use provision_vm.sh for that).
+# Pass $DEV_USERNAME as the machine name argument
+if DEV_USERNAME="$DEV_USERNAME" sudo -E vagrant up "$DEV_USERNAME" --provider=virtualbox; then
+  echo "VM for '$DEV_USERNAME' is running."
 else
-  echo "Error: Failed to start VM '$VM_NAME'."
+  echo "Error: Failed to start VM for '$DEV_USERNAME' using 'vagrant up'."
+  echo "Ensure the VM was created first using './host_scripts/provision_vm.sh $DEV_USERNAME'."
   exit 1
 fi
 

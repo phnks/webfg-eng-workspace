@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# Script to restart a specific developer VM by saving its state and then resuming it.
+# Script to restart a specific developer VM by saving its state (suspend)
+# and then resuming it using Vagrant.
 
 # Check if username is provided
 if [ -z "$1" ]; then
@@ -8,80 +9,69 @@ if [ -z "$1" ]; then
   exit 1
 fi
 
-USERNAME=$1
-VM_NAME="dev-${USERNAME}-vm"
+DEV_USERNAME=$1
+VM_NAME="dev-${DEV_USERNAME}-vm" # Used for messaging
 
-echo ">>> Attempting to restart (via savestate) VM: $VM_NAME..."
+echo ">>> Attempting to restart (via suspend/resume) VM for user '$DEV_USERNAME' using Vagrant..."
 
-# Check if VM exists
-if ! VBoxManage showvminfo "$VM_NAME" --machinereadable > /dev/null 2>&1; then
-  echo "Error: VM '$VM_NAME' not found."
-  exit 1
+# Get the current state using vagrant status
+# We need to pass DEV_USERNAME here too, in case Vagrant needs it to identify the machine
+echo "Checking current state..."
+# Pass $DEV_USERNAME as the machine name argument
+VAGRANT_STATUS_OUTPUT=$(DEV_USERNAME="$DEV_USERNAME" vagrant status "$DEV_USERNAME" --machine-readable 2>&1)
+VAGRANT_STATUS_EXIT_CODE=$?
+
+if [ $VAGRANT_STATUS_EXIT_CODE -ne 0 ]; then
+    echo "Error getting Vagrant status for '$DEV_USERNAME'."
+    echo "$VAGRANT_STATUS_OUTPUT"
+    exit 1
 fi
 
-# Check current VM state
-VM_STATE=$(VBoxManage showvminfo "$VM_NAME" --machinereadable | grep VMState= | cut -d'=' -f2 | tr -d '"')
+# Parse the state (robust parsing is tricky, this is a basic attempt)
+# Format is like: 1680819788,default,state,running
+VM_STATE=$(echo "$VAGRANT_STATUS_OUTPUT" | grep ",state," | cut -d, -f4)
 
-# --- Save State Phase ---
-if [ "$VM_STATE" == "running" ]; then
-  echo "VM is running. Attempting to save state..."
-  VBoxManage controlvm "$VM_NAME" savestate
-
-  # Wait for the VM state to change
-  TIMEOUT=60 # seconds
-  echo "Waiting up to $TIMEOUT seconds for VM state to change to 'saved'..."
-  COUNT=0
-  while [ "$VM_STATE" == "running" ] && [ $COUNT -lt $TIMEOUT ]; do
-    sleep 1
-    VM_STATE=$(VBoxManage showvminfo "$VM_NAME" --machinereadable | grep VMState= | cut -d'=' -f2 | tr -d '"')
-    COUNT=$((COUNT + 1))
-    echo -n "."
-  done
-  echo "" # Newline after dots
-
-  # Check state after waiting
-  VM_STATE=$(VBoxManage showvminfo "$VM_NAME" --machinereadable | grep VMState= | cut -d'=' -f2 | tr -d '"')
-  if [ "$VM_STATE" == "running" ]; then
-    echo "Error: VM '$VM_NAME' did not transition to saved state within $TIMEOUT seconds. Restart aborted."
+if [ -z "$VM_STATE" ]; then
+    echo "Error: Could not determine VM state from Vagrant status output:"
+    echo "$VAGRANT_STATUS_OUTPUT"
     exit 1
-  elif [ "$VM_STATE" != "saved" ]; then
-     echo "Error: VM entered unexpected state '$VM_STATE' after savestate command. Restart aborted."
-     exit 1
-  else
-     echo "VM state saved successfully."
+fi
+
+echo "Current state: $VM_STATE"
+
+# --- Suspend Phase (if running) ---
+if [ "$VM_STATE" == "running" ]; then
+  echo "VM is running. Attempting to suspend..."
+  # Pass $DEV_USERNAME as the machine name argument
+  if ! DEV_USERNAME="$DEV_USERNAME" sudo -E vagrant suspend "$DEV_USERNAME"; then
+      echo "Error: Failed to suspend VM for '$DEV_USERNAME'."
+      exit 1
   fi
+  echo "VM suspended successfully."
+  # After suspend, the state should be 'saved' for the resume step
+  VM_STATE="saved"
 elif [ "$VM_STATE" == "saved" ]; then
-  echo "VM is already in a saved state. Proceeding directly to start phase."
-elif [ "$VM_STATE" == "poweroff" ] || [ "$VM_STATE" == "aborted" ]; then
-   echo "VM is powered off or aborted (state: '$VM_STATE'). Cannot restart via savestate. Use start_vm.sh instead."
-   exit 1
+  echo "VM is already suspended (saved state)."
 else
-  echo "Error: VM '$VM_NAME' is in an unexpected state ('$VM_STATE'). Cannot restart via savestate."
+  echo "Error: VM is not running or saved (state: '$VM_STATE'). Cannot restart via suspend/resume."
+  echo "Use './host_scripts/start_vm.sh $DEV_USERNAME' or './host_scripts/restart_vm.sh $DEV_USERNAME' instead."
   exit 1
 fi
 
-# --- Start Phase (Resume) ---
-echo ">>> Attempting to resume/start VM: $VM_NAME..."
-# Re-check state just in case
-VM_STATE=$(VBoxManage showvminfo "$VM_NAME" --machinereadable | grep VMState= | cut -d'=' -f2 | tr -d '"')
-
-if [ "$VM_STATE" == "running" ]; then
-    echo "Error: VM '$VM_NAME' is already running (unexpected). Restart aborted."
-    exit 1
-elif [ "$VM_STATE" != "saved" ]; then
-    # If it's not saved at this point (e.g., poweroff), we shouldn't proceed with a normal start here.
-    echo "Error: VM is not in a saved state ('$VM_STATE'). Cannot resume. Restart aborted."
-    exit 1
-fi
-
-# Start the VM (resumes from saved state if state is 'saved')
-VBoxManage startvm "$VM_NAME" --type gui
-
-if [ $? -eq 0 ]; then
-  echo "VM '$VM_NAME' resumed/restarted successfully."
+# --- Resume Phase ---
+# At this point, VM_STATE should be 'saved'
+if [ "$VM_STATE" == "saved" ]; then
+    echo ">>> Attempting to resume VM for '$DEV_USERNAME'..."
+    # Pass $DEV_USERNAME as the machine name argument
+    if ! DEV_USERNAME="$DEV_USERNAME" sudo -E vagrant resume "$DEV_USERNAME"; then
+        echo "Error: Failed to resume VM for '$DEV_USERNAME'."
+        exit 1
+    fi
+    echo "VM for '$DEV_USERNAME' resumed successfully."
 else
-  echo "Error: Failed to resume/start VM '$VM_NAME' during restart."
-  exit 1
+    # Should not happen if logic above is correct, but good to check
+    echo "Error: VM is in unexpected state '$VM_STATE' before resume phase. Aborting."
+    exit 1
 fi
 
 exit 0

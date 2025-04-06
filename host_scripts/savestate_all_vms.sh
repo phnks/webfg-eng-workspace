@@ -34,17 +34,8 @@ grep -v '^#' "$CONFIG_FILE" | grep -v '^[[:space:]]*$' | while IFS= read -r USER
   fi
 
   echo ">>> Processing user: $USERNAME"
-  VM_NAME="dev-${USERNAME}-vm"
 
-  # Check if VM exists using VBoxManage first
-  if ! VBoxManage showvminfo "$VM_NAME" --machinereadable > /dev/null 2>&1; then
-    echo "VM '$VM_NAME' not found. Skipping."
-    FAIL_COUNT=$((FAIL_COUNT + 1)) # Count not found as a failure/skip
-    echo "--------------------------------------------------"
-    continue
-  fi
-
-  # Attempt to save the VM state
+  # Attempt to save the VM state using the savestate_vm.sh script (which now uses vagrant suspend)
   if "$SAVESTATE_SCRIPT" "$USERNAME"; then
     echo "Save state command finished for '$USERNAME'."
     SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
