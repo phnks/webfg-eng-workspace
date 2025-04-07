@@ -12,9 +12,11 @@ end
 vm_name = "dev-#{dev_username}-vm"
 
 Vagrant.configure("2") do |config|
+
   # Define the specific machine based on the username environment variable
   # This makes Vagrant aware of 'homonculus', 'anum', etc. as distinct machines
   config.vm.define dev_username do |machine_config|
+
     # Use the Bento Ubuntu 24.04 LTS 64-bit server image
     machine_config.vm.box = "bento/ubuntu-24.04"
     machine_config.vm.box_check_update = true # Check for box updates on 'vagrant up'
@@ -31,6 +33,9 @@ Vagrant.configure("2") do |config|
       # Set the name that appears in the VirtualBox GUI
       # This uses the vm_name calculated outside the block
       vb.name = vm_name
+
+      # Enable bidirectional shared clipboard
+      vb.customize ["modifyvm", :id, "--clipboard-mode", "bidirectional"]
     end
 
     # --- Port Forwarding ---

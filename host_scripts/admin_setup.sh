@@ -65,6 +65,12 @@ echo "Verifying installation:"
 vagrant --version || echo "Vagrant command not found after installation attempt."
 
 echo ""
+echo ">>> Installing vagrant-vbguest plugin..."
+# Run as root since the script uses sudo, installs plugin system-wide for root
+# Allow failure with a warning
+vagrant plugin install vagrant-vbguest || echo "Warning: Failed to install vagrant-vbguest plugin."
+
+echo ""
 echo ">>> Reconfiguring virtualbox-dkms to build modules for the current kernel..."
 dpkg-reconfigure virtualbox-dkms || echo "!!! dpkg-reconfigure virtualbox-dkms failed. Check build logs."
 

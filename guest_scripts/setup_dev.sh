@@ -92,7 +92,35 @@ else
     else
         echo "Warning: google-chrome.desktop not found. Cannot set default browser."
     fi
+
+    # --- Set Environment Variables for User ---
+    echo "Setting DEVCHAT_HOST_IP environment variable in /home/$USERNAME/.bashrc ..."
+    # Append the export command to the user's .bashrc
+    echo '' >> "/home/$USERNAME/.bashrc" # Add a newline for separation
+    echo '# Set IP for host service communication' >> "/home/$USERNAME/.bashrc"
+    echo 'export DEVCHAT_HOST_IP=10.0.2.2' >> "/home/$USERNAME/.bashrc"
+    # Ensure the file is owned by the user
+    chown "$USERNAME:$USERNAME" "/home/$USERNAME/.bashrc"
+
 fi
+
+# --- Set Environment Variables for User (Run Every Time) ---
+# Ensure this runs even if the user already existed
+if [ -f "/home/$USERNAME/.bashrc" ]; then
+    # Check if the line already exists to avoid duplicates
+    if ! grep -q 'export DEVCHAT_HOST_IP=10.0.2.2' "/home/$USERNAME/.bashrc"; then
+        echo "Setting DEVCHAT_HOST_IP environment variable in /home/$USERNAME/.bashrc ..."
+        echo '' >> "/home/$USERNAME/.bashrc" # Add a newline for separation
+        echo '# Set IP for host service communication' >> "/home/$USERNAME/.bashrc"
+        echo 'export DEVCHAT_HOST_IP=10.0.2.2' >> "/home/$USERNAME/.bashrc"
+        # Ownership should be correct if user exists or was just created
+    else
+         echo "DEVCHAT_HOST_IP already set in /home/$USERNAME/.bashrc."
+    fi
+else
+    echo "Warning: /home/$USERNAME/.bashrc not found. Cannot set DEVCHAT_HOST_IP."
+fi
+
 
 # --- Install Node.js and npm ---
 echo ">>> Installing Node.js and npm..."
@@ -115,17 +143,68 @@ fi
 
 
 # --- Install devchat CLI tool ---
-echo ">>> Installing devchat CLI tool..."
-# Copy the script from the synced folder (assuming /vagrant is the default sync)
-# to /usr/local/bin for system-wide access
-if [ -f /vagrant/vm_cli/devchat.js ]; then
-    cp /vagrant/vm_cli/devchat.js /usr/local/bin/devchat
-    chmod +x /usr/local/bin/devchat
-    echo "devchat installed to /usr/local/bin/devchat"
+echo ">>> Installing devchat CLI tool wrapper..."
+# Create a wrapper script in /usr/local/bin that executes the actual script
+# from its source directory (/vagrant/vm_cli) so node_modules are found.
+DEVCHAT_SOURCE_DIR="/vagrant/vm_cli" # Assuming default synced folder
+DEVCHAT_SCRIPT="devchat.js"
+DEVCHAT_WRAPPER="/usr/local/bin/devchat"
+
+if [ -f "${DEVCHAT_SOURCE_DIR}/${DEVCHAT_SCRIPT}" ]; then
+    # Create the wrapper script content
+    WRAPPER_CONTENT="#!/bin/bash\n# Wrapper for devchat CLI\ncd \"${DEVCHAT_SOURCE_DIR}\" || exit 1\nexec node \"${DEVCHAT_SCRIPT}\" \"\$@\""
+
+    # Write the wrapper script
+    echo -e "${WRAPPER_CONTENT}" > "${DEVCHAT_WRAPPER}"
+    chmod +x "${DEVCHAT_WRAPPER}"
+    echo "devchat wrapper installed to ${DEVCHAT_WRAPPER}"
 else
-    echo "Warning: /vagrant/vm_cli/devchat.js not found. Cannot install devchat tool."
-    echo "Ensure the vm_cli directory is present in the project root."
+    echo "Warning: ${DEVCHAT_SOURCE_DIR}/${DEVCHAT_SCRIPT} not found. Cannot install devchat tool."
+    echo "Ensure the vm_cli directory is present in the project root and synced."
 fi
+
+
+# --- Install Correct VirtualBox Guest Additions ---
+echo ">>> Installing VirtualBox Guest Additions (target: 6.1.50)..."
+# Install prerequisites for building kernel modules (might be redundant but ensures they are present)
+apt-get install -y build-essential dkms linux-headers-$(uname -r)
+
+# Download the correct Guest Additions ISO
+# Using 6.1.50 as it matches the DKMS version installed on the host via apt
+GA_VERSION="6.1.50"
+GA_ISO="VBoxGuestAdditions_${GA_VERSION}.iso"
+GA_URL="https://download.virtualbox.org/virtualbox/${GA_VERSION}/${GA_ISO}"
+ISO_MOUNT_POINT="/mnt/iso"
+
+echo "Downloading Guest Additions ISO from ${GA_URL}..."
+wget -q -O "/tmp/${GA_ISO}" "${GA_URL}"
+if [ $? -ne 0 ]; then
+    echo "Error: Failed to download Guest Additions ISO. Skipping installation."
+else
+    echo "Mounting Guest Additions ISO..."
+    mkdir -p "${ISO_MOUNT_POINT}"
+    mount "/tmp/${GA_ISO}" "${ISO_MOUNT_POINT}" -o loop
+
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to mount Guest Additions ISO. Skipping installation."
+    else
+        echo "Running Guest Additions installer..."
+        # Use --nox11 because this script runs non-interactively.
+        # The --force flag is not valid for 6.1.50 installer. It might prompt or handle overwrite automatically.
+        if /bin/sh "${ISO_MOUNT_POINT}/VBoxLinuxAdditions.run" --nox11; then
+             echo "Guest Additions installation script finished."
+             # Check the log file for specific success/failure messages if needed
+        else
+             echo "Warning: Guest Additions installation script execution failed. Check /var/log/vboxadd-setup.log"
+        fi
+
+        echo "Cleaning up Guest Additions ISO..."
+        umount "${ISO_MOUNT_POINT}" || echo "Warning: Failed to unmount ISO."
+    fi
+    rm -f "/tmp/${GA_ISO}"
+    rmdir "${ISO_MOUNT_POINT}" || echo "Warning: Failed to remove mount point dir."
+fi
+# --- End Guest Additions Install ---
 
 
 # Clean up apt cache
