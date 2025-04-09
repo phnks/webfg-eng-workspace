@@ -27,8 +27,8 @@ Vagrant.configure("2") do |config|
       vb.gui = true
 
       # Customize VM resources (adjust as needed)
-      vb.memory = "4096" # Allocate 4GB RAM
-      vb.cpus = "2"      # Allocate 2 CPU cores
+      vb.memory = "8192" # Allocate 8GB RAM
+      vb.cpus = "4"      # Allocate 4 CPU cores
 
       # Set the name that appears in the VirtualBox GUI
       # This uses the vm_name calculated outside the block
@@ -37,6 +37,12 @@ Vagrant.configure("2") do |config|
       # Enable bidirectional shared clipboard
       vb.customize ["modifyvm", :id, "--clipboard-mode", "bidirectional"]
     end
+
+    # --- Networking ---
+    # Use Bridged Networking (public_network) to get an IP on the host's LAN
+    # Specify the bridge interface directly to avoid interactive prompts.
+    # Replace "wlp41s0" if your desired host interface is different.
+    machine_config.vm.network "public_network", bridge: "wlp41s0"
 
     # --- Port Forwarding ---
     # IMPORTANT: Simple port forwarding like guest: 22, host: 2222 will conflict

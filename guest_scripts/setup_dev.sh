@@ -30,7 +30,68 @@ apt-get install -y xubuntu-desktop lightdm
 
 echo ">>> Installing common development tools and dependencies..."
 # Add wget, gpg for adding external repos, apt-transport-https for https sources
-apt-get install -y git vim curl build-essential net-tools openssh-server wget gpg apt-transport-https
+# Add unzip for AWS CLI, python3 and pip for SAM CLI
+apt-get install -y git vim curl build-essential net-tools openssh-server wget gpg apt-transport-https unzip python3 python3-pip
+
+# --- Install GitHub CLI (gh) ---
+echo ">>> Installing GitHub CLI..."
+# Add GH CLI key and repository (following official instructions)
+curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+apt-get update -y
+apt-get install -y gh
+echo "GitHub CLI installed."
+
+# --- Install AWS CLI v2 ---
+echo ">>> Installing AWS CLI v2..."
+cd /tmp
+# Check if AWS CLI is already installed before downloading/installing
+if command -v aws &> /dev/null; then
+    echo "AWS CLI already installed. Attempting update..."
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+    unzip -oq awscliv2.zip # Use -o to overwrite without prompt, -q for quiet
+    ./aws/install --update # Use --update flag
+    rm -rf aws awscliv2.zip
+    echo "AWS CLI updated."
+else
+    echo "AWS CLI not found. Performing fresh install..."
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+    unzip -q awscliv2.zip # Use -q for quiet
+    ./aws/install # Installs to /usr/local/aws-cli and creates symlink at /usr/local/bin/aws
+    rm -rf aws awscliv2.zip
+    echo "AWS CLI installed."
+fi
+# Verify (optional)
+# aws --version
+
+# --- Install AWS SAM CLI ---
+echo ">>> Installing pipx..."
+apt-get install -y pipx
+# Ensure pipx paths are available for the target user
+# Run this as the user to set up the pipx environment correctly
+echo "Ensuring pipx path for user $USERNAME..."
+sudo -i -u "$USERNAME" bash -c 'pipx ensurepath' || echo "Warning: pipx ensurepath command failed."
+
+echo ">>> Installing AWS SAM CLI using pipx..."
+# Install SAM CLI using pipx - run as root, pipx handles user context? Or run as user?
+# Let's try running as the target user to ensure it's installed in their context.
+sudo -i -u "$USERNAME" bash -c 'pipx install aws-sam-cli' || echo "Warning: pipx install aws-sam-cli failed."
+echo "AWS SAM CLI installation attempted via pipx."
+
+# Note: pipx ensurepath should have added ~/.local/bin to the PATH in .bashrc or similar
+# Let's double-check and add it if missing, as before.
+if [ -f "/home/$USERNAME/.bashrc" ]; then
+    if ! grep -q '.local/bin' "/home/$USERNAME/.bashrc"; then
+        echo "Adding ~/.local/bin to PATH in /home/$USERNAME/.bashrc (fallback for pipx/sam)..."
+        echo '' >> "/home/$USERNAME/.bashrc"
+        echo '# Add local bin to PATH for pipx/pip user installs' >> "/home/$USERNAME/.bashrc"
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "/home/$USERNAME/.bashrc"
+    fi
+fi
+# Verify (optional, run as user after sourcing .bashrc or new login)
+# sudo -i -u "$USERNAME" bash -c 'source ~/.bashrc && sam --version'
+
 
 # --- Install Google Chrome ---
 echo ">>> Installing Google Chrome..."
@@ -126,12 +187,14 @@ fi
 echo ">>> Installing Node.js and npm..."
 # Check if Node.js is installed, install if not (using nodesource setup)
 if ! command -v node &> /dev/null; then
-    echo "Node.js not found, installing..."
-    # Use nodesource setup script for a recent version (e.g., Node 20 LTS)
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    echo "Node.js not found, installing Node.js v22..."
+    # Use nodesource setup script for Node 22 LTS
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     apt-get install -y nodejs
 else
-    echo "Node.js already installed: $(node -v)"
+    # Check if the installed version is v22, upgrade if not? For simplicity, just log for now.
+    # A more robust check could compare `node -v` output.
+    echo "Node.js already installed: $(node -v). Ensure it is v22 if required."
 fi
 # Ensure npm is available (usually comes with nodejs package)
 if ! command -v npm &> /dev/null; then
