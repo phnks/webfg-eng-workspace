@@ -13,3 +13,6 @@ node_modules/
 Thumbs.db
 
 *.pid
+
+# Ignore GitHub App private keys
+config/*.private-key.pem
