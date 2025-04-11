@@ -1,8 +1,5 @@
 # -*- mode: ruby -*-
-# -*- mode: ruby -*-
 # vi: set ft=ruby :
-
-require 'base64' # Needed for encoding the private key
 
 # Get the target username from the environment variable
 # This will be used to define the specific machine Vagrant manages
@@ -13,56 +10,6 @@ end
 
 # Construct the desired VM name for VirtualBox
 vm_name = "dev-#{dev_username}-vm"
-
-# --- Define GitHub App Credentials per User ---
-# Store credentials in a hash keyed by username
-github_creds = {
-  "anum" => {
-    app_id: "1210600",
-    install_id: "64247573",
-    key_path: "config/anum-bot-app.2025-04-09.private-key.pem",
-    git_name: "anum-bot",
-    git_email: "1210600+anum-bot@users.noreply.github.com"
-  },
-  "homonculus" => {
-    app_id: "1210603",
-    install_id: "64247782",
-    key_path: "config/homonculus-bot-app.2025-04-09.private-key.pem",
-    git_name: "homonculus-bot",
-    git_email: "1210603+homonculus-bot@users.noreply.github.com"
-  }
-  # Add more users here if needed
-}
-
-# Get the specific credentials for the current dev_username
-current_creds = github_creds[dev_username]
-unless current_creds
-  raise "GitHub credentials not defined in Vagrantfile for user: #{dev_username}"
-end
-
-# --- Prepare Environment Variables ---
-# We now expect GH_INSTALLATION_TOKEN to be set in the environment
-# before Vagrant runs (e.g., by the calling provision_vm.sh script).
-gh_installation_token = ENV['GH_INSTALLATION_TOKEN']
-unless gh_installation_token
-    raise "Environment variable GH_INSTALLATION_TOKEN must be set!"
-end
-
-# Get the specific Git author credentials for the current dev_username
-current_creds = github_creds[dev_username]
-unless current_creds
-  raise "GitHub credentials not defined in Vagrantfile for user: #{dev_username}"
-end
-
-# Prepare environment variables for the provisioner
-provision_env = {
-  "DEV_USER" => dev_username,
-  "GH_INSTALLATION_TOKEN" => gh_installation_token, # Pass the token from the environment
-  "GIT_AUTHOR_NAME" => current_creds[:git_name],
-  "GIT_AUTHOR_EMAIL" => current_creds[:git_email]
-}
-# --- End Environment Setup ---
-
 
 Vagrant.configure("2") do |config|
 
@@ -109,8 +56,8 @@ Vagrant.configure("2") do |config|
 
     # Provision the VM using the setup script
     machine_config.vm.provision "shell",
-      # Pass the specific username AND GitHub credentials to the guest script
-      env: provision_env, # Use the hash prepared above
+      # Pass the specific username to the guest script via DEV_USER env var
+      env: {"DEV_USER" => dev_username},
       path: "guest_scripts/setup_dev.sh",
       args: "" # Optional arguments to the script if needed
 

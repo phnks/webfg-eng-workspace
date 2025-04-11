@@ -33,56 +33,15 @@ echo ">>> Installing common development tools and dependencies..."
 # Add unzip for AWS CLI, python3 and pip for SAM CLI
 apt-get install -y git vim curl build-essential net-tools openssh-server wget gpg apt-transport-https unzip python3 python3-pip
 
-# --- Install Latest GitHub CLI (gh) ---
-echo ">>> Installing latest GitHub CLI..."
-# Remove existing gh if installed via apt to avoid conflicts
-apt-get remove -y gh || echo "gh not installed via apt, proceeding."
-# Clean up old apt source if it exists
-rm -f /etc/apt/sources.list.d/github-cli.list
+# --- Install GitHub CLI (gh) ---
+echo ">>> Installing GitHub CLI..."
+# Add GH CLI key and repository (following official instructions)
+curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
 apt-get update -y
-
-# Download the latest .deb package from GitHub releases
-# Determine architecture
-ARCH=$(dpkg --print-architecture)
-if [ "$ARCH" = "amd64" ]; then
-    GH_ARCH="amd64"
-elif [ "$ARCH" = "arm64" ]; then
-    GH_ARCH="arm64"
-# Add other architectures if needed, e.g., armhf
-else
-    echo "Unsupported architecture: $ARCH for gh cli download."
-    exit 1
-fi
-
-GH_VERSION=$(curl -s "https://api.github.com/repos/cli/cli/releases/latest" | grep -Po '"tag_name": "v\K[0-9.]+')
-if [ -z "$GH_VERSION" ]; then
-    echo "Failed to fetch latest gh version. Exiting."
-    exit 1
-fi
-echo "Latest gh version: $GH_VERSION"
-GH_DEB_URL="https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GH_ARCH}.deb"
-GH_DEB_PATH="/tmp/gh_${GH_VERSION}_linux_${GH_ARCH}.deb"
-
-echo "Downloading gh from ${GH_DEB_URL}..."
-wget -q -O "${GH_DEB_PATH}" "${GH_DEB_URL}"
-if [ $? -ne 0 ]; then
-    echo "Error: Failed to download gh deb package. Exiting."
-    exit 1
-fi
-
-echo "Installing gh deb package..."
-# Use apt install to handle dependencies
-apt-get install -y "${GH_DEB_PATH}"
-if [ $? -ne 0 ]; then
-    echo "Error: Failed to install gh deb package. Exiting."
-    exit 1
-fi
-
-# Clean up downloaded deb
-rm -f "${GH_DEB_PATH}"
-echo "Latest GitHub CLI installed successfully."
-# Verify version (optional)
-gh --version
+apt-get install -y gh
+echo "GitHub CLI installed."
 
 # --- Install AWS CLI v2 ---
 echo ">>> Installing AWS CLI v2..."
@@ -203,66 +162,8 @@ else
     echo 'export DEVCHAT_HOST_IP=10.0.2.2' >> "/home/$USERNAME/.bashrc"
     # Ensure the file is owned by the user
     chown "$USERNAME:$USERNAME" "/home/$USERNAME/.bashrc"
-fi # End of the user creation block
 
-# --- GitHub CLI Auth & Git Config (Run Every Time) ---
-# This block should run regardless of whether the user was just created or already existed.
-echo ">>> Configuring GitHub CLI and Git for $USERNAME..."
-# Check for the installation token instead of App ID/Key
-if [ -n "$GH_INSTALLATION_TOKEN" ] && [ -n "$GIT_AUTHOR_NAME" ] && [ -n "$GIT_AUTHOR_EMAIL" ]; then
-    echo "GitHub Installation Token and Git author info found, attempting configuration..."
-    # TEMP_KEY_PATH is no longer needed
-
-    # Ensure the user's home directory exists and has correct permissions before proceeding
-    if [ ! -d "/home/$USERNAME" ]; then
-        echo "Error: Home directory /home/$USERNAME not found. Cannot configure GitHub/Git."
-    else
-        # Ensure ownership is correct before running sudo
-        chown -R "$USERNAME:$USERNAME" "/home/$USERNAME"
-        echo "Attempting to execute sudo block for $USERNAME (using sudo -u, direct command)..."
-
-        # Run as the user using sudo -u and bash -c
-        sudo -u "$USERNAME" HOME="/home/$USERNAME" bash -c "
-            # set -e # Temporarily disable exit on error for debugging
-            echo '[User Shell] Starting GitHub/Git config...'
-            # No private key decoding needed
-
-            echo '[User Shell] Attempting gh auth login (with --with-token)...'
-            # Pipe the token to gh auth login
-            echo \"$GH_INSTALLATION_TOKEN\" | gh auth login --hostname github.com --with-token
-            GH_AUTH_STATUS=\$?
-            echo \"[User Shell] gh auth login exited with status: \$GH_AUTH_STATUS\"
-
-            if [ \$GH_AUTH_STATUS -eq 0 ]; then
-                echo '[User Shell] gh auth login successful.'
-                echo '[User Shell] Configuring Git user...'
-                git config --global user.name \"$GIT_AUTHOR_NAME\"
-                git config --global user.email \"$GIT_AUTHOR_EMAIL\"
-                echo '[User Shell] Git configured.'
-            else
-                echo '[User Shell] gh auth login failed. Skipping git config.'
-            fi
-
-            echo '[User Shell] Displaying gh config:'
-            cat ~/.config/gh/hosts.yml || echo '[User Shell] Could not cat gh config file.'
-
-            # No temporary key to clean up
-            echo '[User Shell] GitHub CLI and Git configuration attempt finished.'
-            exit \$GH_AUTH_STATUS # Exit subshell with gh auth status
-        "
-        SUDO_EXIT_STATUS=$?
-        echo "Sudo command finished with exit status: $SUDO_EXIT_STATUS"
-        if [ $SUDO_EXIT_STATUS -ne 0 ]; then
-             echo "Warning: Subshell for GitHub/Git configuration failed for $USERNAME."
-        fi
-
-        # No key file to clean up here either
-    fi
-else
-    # Update warning message
-    echo "Warning: GitHub Installation Token or Git author info not provided via environment variables (GH_INSTALLATION_TOKEN, GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL). Skipping gh auth and git config."
 fi
-# --- End GitHub CLI Auth & Git Config ---
 
 # --- Set Environment Variables for User (Run Every Time) ---
 # Ensure this runs even if the user already existed
