@@ -1,0 +1,26 @@
+# Python virtual environment
+venv/
+
+# Environment variables
+.env
+
+# Log files
+*.log
+*.log.*
+
+# PID files
+*.pid
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
