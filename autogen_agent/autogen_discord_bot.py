@@ -27,7 +27,7 @@ if not OPENAI_API_KEY:
 # --- AutoGen Configuration ---
 config_list = [
     {
-        'model': 'gpt-4', # Or another model like gpt-3.5-turbo
+        'model': 'gpt-3.5-turbo', # Changed from gpt-4 as per user request
         'api_key': OPENAI_API_KEY,
     }
 ]
@@ -53,7 +53,7 @@ assistant = autogen.AssistantAgent(
 user_proxy = autogen.UserProxyAgent(
    name="user_proxy",
    human_input_mode="NEVER", # No human intervention needed in this setup
-   max_consecutive_auto_reply=5,
+   max_consecutive_auto_reply=8, # Increased from 5
    is_termination_msg=lambda x: x.get("content", "").rstrip().endswith("TERMINATE"),
    code_execution_config=False, # Disable code execution for safety unless needed
    # llm_config=llm_config, # Optional: User proxy can also use LLM
@@ -111,24 +111,37 @@ async def on_message(message):
                 # Let's try initiating the chat and capturing the last message.
                 chat_history = [] # Store conversation history if needed
 
-                # Define a function to capture the last message
-                last_message_content = None
-                def capture_last_message_hook(recipient, messages, sender, config):
-                    nonlocal last_message_content
-                    if messages and isinstance(messages, list):
-                         # Get the last message dictionary
-                        last_msg = messages[-1]
-                        # Extract content, handle potential None or missing 'content'
-                        content = last_msg.get('content')
-                        if content:
-                            last_message_content = str(content).strip()
-                        else:
-                             # Handle cases where content might be missing or different structure
-                            last_message_content = f"Received a message structure without standard content: {last_msg}"
-                    elif isinstance(messages, str): # Sometimes messages might be simple strings
-                        last_message_content = messages.strip()
+                # Define a function to capture the *first* assistant message
+                # We need a flag or check within the scope of the on_message handler
+                # to ensure we only capture the first relevant reply.
+                # Let's reset this variable for each new Discord message received.
+                first_assistant_message_captured = None
 
-                    print(f"DEBUG: Hook captured message from {sender.name}: {last_message_content}") # Debug print
+                def capture_first_assistant_message_hook(recipient, messages, sender, config):
+                    nonlocal first_assistant_message_captured
+                    # Only capture if it's from the assistant and we haven't captured one yet for this interaction
+                    if sender.name == assistant.name and first_assistant_message_captured is None:
+                        if messages and isinstance(messages, list):
+                            # Get the last message dictionary (which is the current message being processed by the hook)
+                            current_msg = messages[-1]
+                            # Extract content, handle potential None or missing 'content'
+                            content = current_msg.get('content')
+                            if content:
+                                first_assistant_message_captured = str(content).strip()
+                                print(f"DEBUG: Hook captured FIRST message from {sender.name}: {first_assistant_message_captured}") # Debug print
+                            else:
+                                # Handle cases where content might be missing or different structure
+                                first_assistant_message_captured = f"Received a message structure without standard content: {current_msg}"
+                                print(f"DEBUG: Hook captured FIRST message structure (no content) from {sender.name}: {first_assistant_message_captured}") # Debug print
+                        elif isinstance(messages, str): # Sometimes messages might be simple strings
+                            first_assistant_message_captured = messages.strip()
+                            print(f"DEBUG: Hook captured FIRST message (string) from {sender.name}: {first_assistant_message_captured}") # Debug print
+
+                    # Still print subsequent messages for debugging, but don't overwrite the captured one
+                    elif sender.name == assistant.name:
+                         current_content = messages[-1].get('content') if isinstance(messages, list) else messages
+                         print(f"DEBUG: Hook saw SUBSEQUENT message from {sender.name}: {str(current_content).strip()}")
+
                     return False, None # Return False to continue the conversation, None indicates no reply from hook
 
 
@@ -137,7 +150,7 @@ async def on_message(message):
                 # Let's try registering it on the user_proxy to see what it gets before termination.
                 user_proxy.register_reply(
                     [autogen.Agent, None], # Triggered by messages from any agent or termination
-                    reply_func=capture_last_message_hook,
+                    reply_func=capture_first_assistant_message_hook, # Use the new hook function
                     config={}, # No specific config needed for this hook
                     reset_config=False, # Keep the hook registered
                 )
@@ -156,19 +169,24 @@ async def on_message(message):
                 # user_proxy.reset() # Resets hooks and other state
 
                 # --- Send Response Back to Discord ---
-                if last_message_content:
-                    print(f"Sending response to Discord: {last_message_content}")
+                # Use the variable that captured the *first* assistant message
+                if first_assistant_message_captured:
+                    print(f"Attempting to send final captured response to Discord channel {message.channel.id}: '{first_assistant_message_captured}'") # Use the correct variable
                     # Discord has a message length limit (2000 characters)
-                    if len(last_message_content) > 2000:
+                    if len(first_assistant_message_captured) > 2000:
+                        print(f"Response length ({len(first_assistant_message_captured)}) exceeds 2000 chars. Sending preamble.")
                         await message.channel.send("The response is too long to display completely.")
                         # Send in chunks or as a file if needed
-                        parts = [last_message_content[i:i+1990] for i in range(0, len(last_message_content), 1990)]
-                        for part in parts:
+                        parts = [first_assistant_message_captured[i:i+1990] for i in range(0, len(first_assistant_message_captured), 1990)]
+                        for i, part in enumerate(parts):
+                            print(f"Sending part {i+1}/{len(parts)} of long response.")
                             await message.channel.send(f"```{part}```") # Send as code block for readability
                     else:
-                        await message.channel.send(last_message_content)
+                        print(f"Sending short response (length {len(first_assistant_message_captured)}).")
+                        await message.channel.send(first_assistant_message_captured) # Use the correct variable
+                    print("Finished sending response to Discord.")
                 else:
-                    print("No response captured from AutoGen.")
+                    print("No first assistant response captured from AutoGen hook to send.") # Updated log message
                     await message.channel.send("Sorry, I couldn't generate a response for that.")
 
         except Exception as e:
