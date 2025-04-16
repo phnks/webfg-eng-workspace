@@ -56,6 +56,7 @@ if USE_GEMINI:
     config_list = [
         {
             "model": "gemini-1.5-pro", # Using gemini-1.5-pro as requested
+            #"model": "gemini-2.5-pro-exp-03-25",
             "api_key": GEMINI_API_KEY,
             "api_type": "google"
         }
