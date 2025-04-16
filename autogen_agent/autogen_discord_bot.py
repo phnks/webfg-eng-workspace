@@ -1,3 +1,9 @@
+# Add this patch at the very top of your script
+import builtins
+builtins.input = lambda prompt="": ""
+
+from functools import partial
+
 import autogen
 import discord
 import autogen
@@ -58,7 +64,11 @@ if USE_GEMINI:
     assistant_system_message = ""
     # Prepend the intended system message to the user prompt later
     # Also add instruction to save code blocks with filenames
-    gemini_initial_prompt_prefix = "You are a helpful AI assistant. Respond to the user's query. When generating code (like HTML, Python, etc.), embed it in a markdown code block and **always** include a filename comment like '# filename: your_filename.ext' on the first line inside the block. "
+    gemini_initial_prompt_prefix = (
+        "You are a helpful AI assistant. Respond to the user's query. When generating code (like HTML, Python, etc.), "
+        "embed it in a markdown code block and **always** include a filename comment like '# filename: your_filename.ext' "
+        "on the first line inside the block. After providing your answer, please conclude by outputting 'TERMINATE' on a new line."
+    )
     print("Using Gemini config list.")
 else:
     config_list = [
@@ -88,7 +98,7 @@ user_proxy = autogen.UserProxyAgent(
    name="user_proxy",
    human_input_mode="NEVER", # No human intervention needed in this setup
    max_consecutive_auto_reply=10, # Allow more back-and-forth for complex tasks like coding
-   is_termination_msg=lambda x: x.get("content", "").rstrip().endswith("TERMINATE"),
+   is_termination_msg=lambda x: not x.get("content", "").strip() or x.get("content", "").rstrip().endswith("TERMINATE"),
    # Enable code execution in the 'coding' directory with a timeout
    code_execution_config={"work_dir": "coding", "use_docker": False, "timeout": 120}, # Added 120-second timeout
    # llm_config=llm_config, # Optional: User proxy can also use LLM
@@ -150,12 +160,14 @@ async def on_message(message):
                 print(f"Initiating AutoGen chat in executor...")
                 loop = asyncio.get_event_loop()
 
-                # Run the blocking initiate_chat in a separate thread
+                print("Sending prompt payload:", initial_message)
                 chat_result = await loop.run_in_executor(
-                    None, # Use default executor (ThreadPoolExecutor)
-                    user_proxy.initiate_chat,
-                    assistant,
-                    {"message": initial_message, "clear_history": True} # Pass args as dict for initiate_chat
+                    None,
+                    lambda: user_proxy.initiate_chat(
+                        assistant,
+                        message=initial_message,   # ✅ correct kwarg
+                        clear_history=True         # ✅ correct kwarg
+                    )
                 )
                 print(f"AutoGen chat finished.")
 
