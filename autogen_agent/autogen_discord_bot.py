@@ -57,7 +57,8 @@ if USE_GEMINI:
     # Gemini doesn't use system_message in the same way, handle it later
     assistant_system_message = ""
     # Prepend the intended system message to the user prompt later
-    gemini_initial_prompt_prefix = "You are a helpful AI assistant. Respond to the user's query. "
+    # Also add instruction to save code blocks with filenames
+    gemini_initial_prompt_prefix = "You are a helpful AI assistant. Respond to the user's query. When generating code (like HTML, Python, etc.), embed it in a markdown code block and **always** include a filename comment like '# filename: your_filename.ext' on the first line inside the block. "
     print("Using Gemini config list.")
 else:
     config_list = [
@@ -66,7 +67,8 @@ else:
             'api_key': OPENAI_API_KEY,
         }
     ]
-    assistant_system_message = "You are a helpful AI assistant. Respond to the user's query."
+    # Add instruction to save code blocks with filenames for OpenAI too
+    assistant_system_message = "You are a helpful AI assistant. Respond to the user's query. When generating code (like HTML, Python, etc.), embed it in a markdown code block and **always** include a filename comment like '# filename: your_filename.ext' on the first line inside the block."
     gemini_initial_prompt_prefix = "" # No prefix needed for OpenAI
     print("Using OpenAI config list.")
 
@@ -87,8 +89,8 @@ user_proxy = autogen.UserProxyAgent(
    human_input_mode="NEVER", # No human intervention needed in this setup
    max_consecutive_auto_reply=10, # Allow more back-and-forth for complex tasks like coding
    is_termination_msg=lambda x: x.get("content", "").rstrip().endswith("TERMINATE"),
-   # Enable code execution in the 'coding' directory
-   code_execution_config={"work_dir": "coding", "use_docker": False},
+   # Enable code execution in the 'coding' directory with a timeout
+   code_execution_config={"work_dir": "coding", "use_docker": False, "timeout": 120}, # Added 120-second timeout
    # llm_config=llm_config, # Optional: User proxy can also use LLM
    # system_message="""Reply TERMINATE if the task has been solved at full satisfaction. Otherwise, reply CONTINUE, or the reason why the task is not solved yet."""
 )
@@ -144,17 +146,20 @@ async def on_message(message):
                     initial_message = gemini_initial_prompt_prefix + initial_message
                     print(f"Prepended Gemini prefix. Full initial message: {initial_message}")
 
-                # --- Initiate AutoGen Chat ---
-                print(f"Initiating AutoGen chat...")
-                # Initiate the chat between user_proxy and assistant
-                chat_result = user_proxy.initiate_chat(
+                # --- Initiate AutoGen Chat Asynchronously ---
+                print(f"Initiating AutoGen chat in executor...")
+                loop = asyncio.get_event_loop()
+
+                # Run the blocking initiate_chat in a separate thread
+                chat_result = await loop.run_in_executor(
+                    None, # Use default executor (ThreadPoolExecutor)
+                    user_proxy.initiate_chat,
                     assistant,
-                    message=initial_message,
-                    clear_history=True # Start fresh for each Discord message
+                    {"message": initial_message, "clear_history": True} # Pass args as dict for initiate_chat
                 )
                 print(f"AutoGen chat finished.")
 
-                # --- Extract Final Response ---
+                # --- Extract Final Response (and check for saved file) ---
                 final_response = "Sorry, I couldn't generate a response for that." # Default
                 if chat_result and chat_result.chat_history:
                     print(f"DEBUG: Chat history length: {len(chat_result.chat_history)}") # Debug history length
@@ -179,24 +184,54 @@ async def on_message(message):
                                          print(f"DEBUG: Skipping TERMINATE message.")
                                          continue # Look at the message before TERMINATE
 
-                                     # Remove code block fences if present
-                                     if content_str.startswith("```") and content_str.endswith("```"):
-                                         # Find the first newline and the last newline
-                                         first_newline = content_str.find('\n')
-                                         last_newline = content_str.rfind('\n')
-                                         if first_newline != -1 and last_newline != -1 and last_newline > first_newline:
-                                             final_response = content_str[first_newline+1:last_newline].strip()
-                                         else: # Fallback if structure is unexpected (e.g., ```text```)
-                                             # Remove the first and last lines (fences)
-                                             lines = content_str.splitlines()
-                                             if len(lines) > 2:
-                                                 final_response = "\n".join(lines[1:-1]).strip()
-                                             else: # If only fences or one line inside, just strip fences
-                                                  final_response = content_str.replace("```", "").strip()
+                                     # Check if the content indicates a file was saved
+                                     # Look for patterns like "Saved file:", "Code saved to", etc.
+                                     # Or check if the user_proxy executed code successfully
+                                     file_saved = False
+                                     if "exitcode: 0" in content_str and "# filename:" in content_str:
+                                         # Extract filename if possible (simple parsing)
+                                         try:
+                                             filename_line = next(line for line in content_str.splitlines() if line.strip().startswith("# filename:"))
+                                             filename = filename_line.split(":", 1)[1].strip()
+                                             saved_file_path = os.path.join("autogen_agent", "coding", filename) # Construct expected path
+                                             if os.path.exists(saved_file_path):
+                                                 final_response = f"Successfully created the file `{filename}` in the coding directory."
+                                                 file_saved = True
+                                                 print(f"Confirmed file saved: {saved_file_path}")
+                                             else:
+                                                 print(f"Code execution reported success, but file not found at: {saved_file_path}")
+                                                 # Fall back to using the content string
+                                                 final_response = content_str
+                                         except Exception as parse_ex:
+                                             print(f"DEBUG: Error parsing filename from content: {parse_ex}")
+                                             final_response = content_str # Fallback
                                      else:
-                                         final_response = content_str # Use the content directly
+                                          # If no file saving detected, process content as before
+                                          # Remove code block fences if present
+                                          if content_str.startswith("```") and content_str.endswith("```"):
+                                              # Find the first newline and the last newline
+                                              first_newline = content_str.find('\n')
+                                              last_newline = content_str.rfind('\n')
+                                              if first_newline != -1 and last_newline != -1 and last_newline > first_newline:
+                                                  # Check if there's a filename comment
+                                                  potential_filename_line = content_str[first_newline+1:].splitlines()[0]
+                                                  if potential_filename_line.strip().startswith("# filename:"):
+                                                      # If it's just code block with filename, report success
+                                                      filename = potential_filename_line.split(":", 1)[1].strip()
+                                                      final_response = f"Generated code for `{filename}`." # Assume it should have been saved
+                                                  else:
+                                                      final_response = content_str[first_newline+1:last_newline].strip()
+                                              else: # Fallback if structure is unexpected (e.g., ```text```)
+                                                  lines = content_str.splitlines()
+                                                  if len(lines) > 2:
+                                                      final_response = "\n".join(lines[1:-1]).strip()
+                                                  else:
+                                                      final_response = content_str.replace("```", "").strip()
+                                          else:
+                                              final_response = content_str # Use the content directly
 
-                                     print(f"Extracted final response: '{final_response}'")
+                                     if not file_saved: # Only print if we didn't confirm file save
+                                         print(f"Extracted final response: '{final_response}'")
                                      break # Found the last relevant message
                         else:
                             print(f"DEBUG: Message {-i-1} is not a dictionary.")
