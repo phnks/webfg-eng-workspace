@@ -2,19 +2,13 @@ import autogen
 import discord
 import os
 import asyncio
-import traceback
+import traceback # Ensure traceback is imported once
 import logging
 from dotenv import load_dotenv
-import autogen
-import discord
-import os
-import asyncio
-import traceback
-import logging
-from dotenv import load_dotenv
-from gemini_client_wrapper import GeminiClientWrapper # Import the wrapper
+# Removed duplicate imports
+# from gemini_client_wrapper import GeminiClientWrapper # Removed custom wrapper import
 import pprint # For pretty printing dicts
-# Reverting to: Class name string in config + registration on instance
+# Using official Autogen Google Gemini integration
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s')
@@ -42,33 +36,51 @@ if not USE_GEMINI and not OPENAI_API_KEY:
     exit(1)
 
 # --- LLM Configuration Selection ---
-llm_config = None
-gemini_config_entry = None # Store the specific config entry
-
-if USE_GEMINI:
-    logger.info("Using Gemini LLM config.")
-    # Include model_client_cls as CLASS NAME string in config_list item
-    gemini_config_entry = { # Store for registration call
-        'model': 'gemini-1.5-flash-latest',
+# Define all potential configurations in a list, similar to OAI_CONFIG_LIST structure
+# Ensure API keys are present before defining the list
+all_configs = []
+if OPENAI_API_KEY:
+    all_configs.append({
+        'model': 'gpt-3.5-turbo',
+        'api_key': OPENAI_API_KEY,
+        # 'api_type': 'openai' # Optional, default is openai
+    })
+if GEMINI_API_KEY:
+    all_configs.append({
+        'model': 'gemini-1.5-pro-latest', # Or 'gemini-pro' based on availability/preference
         'api_key': GEMINI_API_KEY,
-        'model_client_cls': "GeminiClientWrapper" # Use simple class name string
-    }
-    config_list_gemini = [gemini_config_entry]
+        'api_type': 'google'
+    })
+# Add other models like vision or dalle if needed in the future
+
+# Select the appropriate config list based on the USE_GEMINI flag
+final_config_list = []
+if USE_GEMINI:
+    logger.info("Selecting Gemini LLM config.")
+    gemini_config = next((config for config in all_configs if config.get('api_type') == 'google'), None)
+    if not gemini_config:
+        logger.error("USE_GEMINI is true, but no Gemini configuration found in all_configs!")
+        exit(1)
+    final_config_list = [gemini_config] # Use ONLY the Gemini config
     llm_config = {
-        "config_list": config_list_gemini,
-        "cache_seed": 43,
+        "config_list": final_config_list,
+        "cache_seed": 43, # Consistent seed for caching
         "temperature": 0.7,
     }
-    logger.debug(f"Gemini LLM config prepared:\n{pprint.pformat(llm_config)}")
+    logger.debug(f"Using Gemini LLM config:\n{pprint.pformat(llm_config)}")
 else:
-    logger.info("Using OpenAI LLM config.")
-    config_list_openai = [{'model': 'gpt-3.5-turbo', 'api_key': OPENAI_API_KEY}]
+    logger.info("Selecting OpenAI LLM config.")
+    openai_config = next((config for config in all_configs if config.get('api_type', 'openai') == 'openai'), None)
+    if not openai_config:
+        logger.error("USE_GEMINI is false, but no OpenAI configuration found in all_configs!")
+        exit(1)
+    final_config_list = [openai_config] # Use ONLY the OpenAI config
     llm_config = {
-        "config_list": config_list_openai,
-        "cache_seed": 42,
+        "config_list": final_config_list,
+        "cache_seed": 42, # Consistent seed for caching
         "temperature": 0.7,
     }
-    logger.debug(f"OpenAI LLM config prepared:\n{pprint.pformat(llm_config)}")
+    logger.debug(f"Using OpenAI LLM config:\n{pprint.pformat(llm_config)}")
 
 
 # --- AutoGen Agents Initialization ---
@@ -82,27 +94,8 @@ try:
         llm_config=llm_config, # Pass the chosen config
         system_message="You are a helpful AI assistant. Generate code or text as requested. If the request involves creating a file (like HTML), provide the complete code within a single markdown code block (e.g., ```html ... ```). The user proxy agent will handle saving the file and terminating the conversation."
     )
-    logger.info(f"AssistantAgent initialized successfully. Initial client type: {type(assistant.client)}, id: {id(assistant.client)}")
-
-    # --- Register Custom Client on the Assistant Instance (if using Gemini) ---
-    if USE_GEMINI:
-        logger.info("Attempting to register GeminiClientWrapper on assistant instance...")
-        try:
-            # Call the registration method on the initialized agent instance
-            # This should find the placeholder client via the "GeminiClientWrapper" string in config_list
-            # and replace it with an actual instance of the GeminiClientWrapper class.
-            assistant.register_model_client(model_client_cls=GeminiClientWrapper, model_pattern="^gemini.*")
-            logger.info(f"Successfully called register_model_client for GeminiClientWrapper. Final client type: {type(assistant.client)}, id: {id(assistant.client)}")
-        except Exception as e:
-            logger.error(f"Failed to register GeminiClientWrapper on assistant instance: {e}")
-            traceback.print_exc()
-            exit(1) # Exit if registration fails
-
-    # Client registration call completed. We assume it was successful if no exception was raised.
-    # The assistant.client attribute remains the OpenAIWrapper instance, which now manages the registered GeminiClientWrapper internally.
-    # AutoGen will select the appropriate client from the wrapper based on the model requested during API calls.
-    # logger.debug(f"Assistant client remains {type(assistant.client)} after registration, as expected.")
-
+    logger.info(f"AssistantAgent initialized successfully using config: {llm_config}")
+    # No need to register client separately when using api_type='google'
 
 except Exception as e:
     logger.error(f"Error initializing AssistantAgent or registering client: {e}")
