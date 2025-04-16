@@ -15,6 +15,8 @@ import json # Import json for parsing potential code blocks
 import traceback # Import traceback for error logging
 # Removed GoogleGeminiClient import and registration as it's likely handled internally in 0.2.x
 
+from autogen.coding import LocalCommandLineCodeExecutor
+
 # Load environment variables
 load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -85,27 +87,31 @@ else:
 
 llm_config["config_list"] = config_list
 
+# 2) Create a local shell executor with full FS access
+WORK_DIR = os.path.abspath("agent_workspace")
+os.makedirs(WORK_DIR, exist_ok=True)
 
-# --- AutoGen Agents ---
-# Assistant Agent: The AI that performs tasks
+executor = LocalCommandLineCodeExecutor(
+    timeout=300,        # allow up to 5 minutes per block
+    work_dir=WORK_DIR,  # full read/write/exec in here
+)
+
+# 3) Assistant: use the built‑in DEFAULT_SYSTEM_MESSAGE which teaches it
+#    how to write code blocks, name files, use print(), and terminate.
 assistant = autogen.AssistantAgent(
     name="assistant",
     llm_config=llm_config,
-    system_message=assistant_system_message # Set based on USE_GEMINI
+    system_message=autogen.AssistantAgent.DEFAULT_SYSTEM_MESSAGE
 )
 
-# User Proxy Agent: Represents the user, initiates chat, and can execute code
+# 4) UserProxy: fully autonomous, executing any code blocks the assistant emits
 user_proxy = autogen.UserProxyAgent(
-   name="user_proxy",
-   human_input_mode="NEVER", # No human intervention needed in this setup
-   max_consecutive_auto_reply=10, # Allow more back-and-forth for complex tasks like coding
-   is_termination_msg=lambda x: not x.get("content", "").strip() or x.get("content", "").rstrip().endswith("TERMINATE"),
-   # Enable code execution in the 'coding' directory with a timeout
-   code_execution_config={"work_dir": "coding", "use_docker": False, "timeout": 120}, # Added 120-second timeout
-   # llm_config=llm_config, # Optional: User proxy can also use LLM
-   # system_message="""Reply TERMINATE if the task has been solved at full satisfaction. Otherwise, reply CONTINUE, or the reason why the task is not solved yet."""
+    name="user_proxy",
+    human_input_mode="NEVER",
+    max_consecutive_auto_reply=1,
+    is_termination_msg=lambda m: m.get("content", "").strip().endswith("TERMINATE"),
+    code_execution_config={"executor": executor},
 )
-
 
 # --- Discord Bot Setup ---
 intents = discord.Intents.default()
