@@ -11,13 +11,12 @@ Discord × AutoGen bridge — fully‑autonomous coding agent
 import builtins, os, sys, asyncio, subprocess, re, traceback
 builtins.input = lambda prompt="": ""
 
-from functools import partial
 from dotenv import load_dotenv
 import autogen
 from autogen.coding import LocalCommandLineCodeExecutor
 import discord
 
-# ── env & basic checks ────────────────────────────────────────────────────────
+# ── env & basic checks ────────────────────────────────────────────────────────
 load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY")
@@ -174,7 +173,11 @@ async def on_message(msg: discord.Message):
 
             # ── send execution results back into the AutoGen conversation ──
             if exec_out:
-                user_proxy.send(assistant, "Execution results:\n" + "\n\n".join(exec_out))
+                # *** FIXED ARGUMENT ORDER HERE ***
+                user_proxy.send(
+                    "Execution results:\n" + "\n\n".join(exec_out),
+                    recipient=assistant
+                )
 
             # ── last assistant message (after possible follow‑up) ───────────
             final_reply = chat_result.chat_history[-1]["content"]
