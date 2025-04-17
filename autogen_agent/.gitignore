@@ -24,3 +24,5 @@ __pycache__/
 .Trashes
 ehthumbs.db
 Thumbs.db
+.cache/
+agent_workspace/
