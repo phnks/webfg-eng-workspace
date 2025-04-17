@@ -1,158 +1,194 @@
 # filename: autogen_discord_bot.py
-import builtins, os, sys, re, asyncio, subprocess, traceback, textwrap
-from dotenv import load_dotenv
-load_dotenv()
+"""
+Discord × AutoGen bridge — fully‑autonomous coding agent
+─────────────────────────────────────────────────────────
+* The assistant can read / write / exec anything inside  agent_workspace/
+* All CLI commands are run for real; their stdout/err is returned to the LLM
+* The event‑loop never blocks (heavy work is off‑loaded to a worker thread)
+"""
+
+# ── monkey‑patch input so the LLM can’t hang waiting for stdin ────────────────
+import builtins, os, sys, asyncio, subprocess, re, traceback
 builtins.input = lambda prompt="": ""
 
+from functools import partial
+from dotenv import load_dotenv
+import autogen
+from autogen.coding import LocalCommandLineCodeExecutor
+import discord
+
+# ── env & basic checks ────────────────────────────────────────────────────────
+load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY")
-GEMINI_API_KEY    = os.getenv("GEMINI_API_KEY")
-USE_GEMINI        = os.getenv("USE_GEMINI", "false").lower() == "true"
+OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY   = os.getenv("GEMINI_API_KEY")
+USE_GEMINI       = os.getenv("USE_GEMINI", "false").lower() == "true"
 
 if not DISCORD_BOT_TOKEN:
-    sys.exit("❌  DISCORD_BOT_TOKEN missing")
+    sys.exit("DISCORD_BOT_TOKEN missing in .env")
+
 if USE_GEMINI and not GEMINI_API_KEY:
-    sys.exit("❌  GEMINI_API_KEY missing")
+    sys.exit("GEMINI_API_KEY missing while USE_GEMINI=true")
 if not USE_GEMINI and not OPENAI_API_KEY:
-    sys.exit("❌  OPENAI_API_KEY missing")
+    sys.exit("OPENAI_API_KEY missing; set USE_GEMINI=true to use Gemini")
 
-import discord, autogen
-from autogen.coding import LocalCommandLineCodeExecutor
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-WORK_DIR = os.path.join(BASE_DIR, "agent_workspace")
-os.makedirs(WORK_DIR, exist_ok=True)
-
-executor = LocalCommandLineCodeExecutor(timeout=600, work_dir=WORK_DIR)
-
+# ── LLM config ────────────────────────────────────────────────────────────────
 llm_config = {
+    "temperature": 0.7,
     "cache_seed": None,
-    "temperature": 0.2,
-    "config_list": [{
-        "api_type": "google" if USE_GEMINI else "openai",
-        "api_key":  GEMINI_API_KEY if USE_GEMINI else OPENAI_API_KEY,
-        "model":    "gemini-1.5-pro" if USE_GEMINI else "gpt-3.5-turbo",
-    }],
+    "config_list": [
+        {
+            "model": "gemini-2.5-pro-exp-03-25" if USE_GEMINI else "gpt-3.5-turbo",
+            "api_key": GEMINI_API_KEY if USE_GEMINI else OPENAI_API_KEY,
+            "api_type": "google"         if USE_GEMINI else "openai",
+        }
+    ]
 }
 
-PREFIX = textwrap.dedent("""
-    Your name is **Homonculus**.
-    You have full shell access in this sandbox VM (folder `agent_workspace/`).
+# ── workspace & executor ──────────────────────────────────────────────────────
+BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
+WORK_DIR  = os.path.join(BASE_DIR, "agent_workspace")
+os.makedirs(WORK_DIR, exist_ok=True)
 
-    • read / write / exec any file
-    • run any CLI command (non‑interactive)
+executor = LocalCommandLineCodeExecutor(
+    work_dir=WORK_DIR,
+    timeout=300,        # 5‑minute cap per code block
+)
 
-    NEVER simulate commands – always run them for real.
-
-    Code block rules
-    ────────────────
-    * wrap code in triple‑back‑ticks
-    * first line inside block:  # filename: …
-
-    Finish every reply with the single word **TERMINATE**.
-""").strip()
-
+# ── AutoGen agents ────────────────────────────────────────────────────────────
 assistant = autogen.AssistantAgent(
     name="assistant",
     llm_config=llm_config,
-    system_message=PREFIX if not USE_GEMINI else autogen.AssistantAgent.DEFAULT_SYSTEM_MESSAGE,
+    system_message=autogen.AssistantAgent.DEFAULT_SYSTEM_MESSAGE
 )
 
 user_proxy = autogen.UserProxyAgent(
     name="user_proxy",
     human_input_mode="NEVER",
-    max_consecutive_auto_reply=1,
-    is_termination_msg=lambda m: str(m.get("content","")).strip().endswith("TERMINATE"),
+    max_consecutive_auto_reply=10,        # allow multi‑step iterations
+    is_termination_msg=lambda m: m.get("content", "").strip() in
+        {"TERMINATE", "TASK COMPLETE", "DONE"},
     code_execution_config={"executor": executor},
 )
 
-# ---------- helpers -------------------------------------------------------- #
-def _extract_and_write(texts):
-    pat = re.compile(r"```(?:\w+)?\s*\n# filename:\s*([^\n]+)\n(.*?)```", re.DOTALL)
-    written=[]
-    for txt in texts:
-        for m in pat.finditer(txt):
-            fname, code = m.group(1).strip(), m.group(2)
-            path = os.path.join(WORK_DIR, fname)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path,"w",encoding="utf-8") as f: f.write(code)
-            written.append(fname)
-    return written
+# ── Discord setup ─────────────────────────────────────────────────────────────
+intents = discord.Intents.default()
+intents.message_content = True
+bot = discord.Client(intents=intents)
 
+channel_locks = {}          # only one task at a time per channel
+
+# ── helper: run all generated *.sh / *.py files and collect outputs ───────────
 def _run_all():
-    res=[]
+    exec_out = []
+    # run *.sh first (they often start servers)
     for fname in sorted(os.listdir(WORK_DIR)):
-        path=os.path.join(WORK_DIR,fname)
-        if fname.endswith(".py"):
-            bg = fname in {"serve.py","server.py","http_server.py"}
-            if bg:
-                p=subprocess.Popen([sys.executable,path],cwd=WORK_DIR,
-                                   stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
-                res.append(f"▶️  Started {fname} (pid {p.pid})")
-            else:
-                try:
-                    out=subprocess.check_output([sys.executable,path],cwd=WORK_DIR,
-                                                stderr=subprocess.STDOUT,text=True,timeout=300)
-                    res.append(f"✅ {fname} exited 0\n{out.strip()}")
-                except subprocess.CalledProcessError as e:
-                    res.append(f"❌ {fname} exited {e.returncode}\n{e.output}")
-        elif fname.endswith(".sh"):
-            try:
-                out=subprocess.check_output(["bash",path],cwd=WORK_DIR,
-                                            stderr=subprocess.STDOUT,text=True,timeout=300)
-                res.append(f"✅ {fname} exited 0\n{out.strip()}")
-            except subprocess.CalledProcessError as e:
-                res.append(f"❌ {fname} exited {e.returncode}\n{e.output}")
-    return res
+        path = os.path.join(WORK_DIR, fname)
+        try:
+            if fname.endswith(".sh"):
+                out = subprocess.check_output(
+                    ["bash", path],
+                    cwd=WORK_DIR,
+                    stderr=subprocess.STDOUT,
+                    timeout=30,            # safety – no infinite loops
+                )
+                exec_out.append(f"✅ {fname} exited 0\n{out.decode() or '(no output)'}")
+            elif fname.endswith(".py") and fname != "server.py":
+                out = subprocess.check_output(
+                    [sys.executable, path],
+                    cwd=WORK_DIR,
+                    stderr=subprocess.STDOUT,
+                    timeout=30,
+                )
+                exec_out.append(f"✅ {fname} exited 0\n{out.decode() or '(no output)'}")
+            elif fname == "server.py":
+                proc = subprocess.Popen([sys.executable, path], cwd=WORK_DIR)
+                exec_out.append(f"🌐 Started server.py (pid {proc.pid})")
+        except subprocess.TimeoutExpired:
+            exec_out.append(f"⏱️  {fname} timed‑out after 30 s")
+        except subprocess.CalledProcessError as e:
+            exec_out.append(f"❌ {fname} exited {e.returncode}\n{e.output.decode()}")
+    return exec_out
 
-def _autogen_turn(prompt:str):
-    if USE_GEMINI:
-        prompt = PREFIX+"\n\n"+prompt
-    result=user_proxy.initiate_chat(assistant,message=prompt,clear_history=False)
-    texts=[m.get("content","") for m in result.chat_history if isinstance(m,dict) and m.get("name")=="assistant"]
-    return texts
-
-# ---------- discord bot ---------------------------------------------------- #
-intents=discord.Intents.default(); intents.message_content=True
-bot=discord.Client(intents=intents)
-locks:dict[int,asyncio.Lock]={}
+# ── Discord events ────────────────────────────────────────────────────────────
+@bot.event
+async def on_ready():
+    print(f"✅ Logged in as {bot.user} ({discord.__version__=})  AutoGen {autogen.__version__}")
 
 @bot.event
-async def on_ready(): print(f"✅ Logged in as {bot.user}")
+async def on_message(msg: discord.Message):
+    if msg.author == bot.user:        # ignore self
+        return
 
-@bot.event
-async def on_message(msg:discord.Message):
-    if msg.author==bot.user: return
-    lock=locks.setdefault(msg.channel.id,asyncio.Lock())
+    lock = channel_locks.setdefault(msg.channel.id, asyncio.Lock())
+    if lock.locked():
+        await msg.channel.send("Busy with the previous task – please wait.")
+        return
+
     async with lock:
-        async with msg.channel.typing():
-            try:
-                loop=asyncio.get_running_loop()
-                assistant_txts = await loop.run_in_executor(None,_autogen_turn,msg.content)
-                written=_extract_and_write(assistant_txts)
-                exec_res=_run_all()
-                if exec_res:
-                    # ---- FIXED call (positional message argument) ---- #
-                    user_proxy.send(
-                        recipient=assistant,
-                        message="Execution results:\n" + "\n\n".join(exec_res)
-                    )
-                last=assistant_txts[-1].rstrip().removesuffix("TERMINATE").strip()
-                parts=[last or "*(no reply)*"]
-                if written: parts.append("📄 Files written: "+", ".join(written))
-                if exec_res: parts.append("🖥️  Execution results:\n"+ "\n\n".join(exec_res))
-                reply="\n\n".join(parts)
+        try:
+            await msg.channel.typing()
 
-                if len(reply)>1990:
-                    await msg.channel.send("*(response split)*")
-                    for i in range(0,len(reply),1990):
-                        await msg.channel.send(f"```{reply[i:i+1990]}```")
-                else:
-                    await msg.channel.send(reply)
-            except Exception as e:
-                traceback.print_exc()
-                await msg.channel.send(f"❌ Error: {e}")
+            # build the first prompt the assistant sees
+            system_header = (
+                "Your name is **Homonculus**.\n"
+                "You have full shell access in this sandbox VM (`agent_workspace/`).\n\n"
+                "• read / write / exec any file\n"
+                "• run any CLI command (non‑interactive)\n\n"
+                "NEVER simulate commands – **always** run them for real.\n\n"
+                "Code block rules\n"
+                "────────────────\n"
+                "* wrap code in triple‑back‑ticks\n"
+                "* first line inside block:  `# filename: …`\n\n"
+                "When the entire task is complete output the single word **TERMINATE**."
+            )
 
-if __name__=="__main__":
-    discord.utils.setup_logging()
+            first_message = f"{system_header}\n\n{msg.content}"
+
+            # ── run AutoGen dialogue in a worker thread so Discord loop stays alive
+            loop = asyncio.get_running_loop()
+            chat_result = await loop.run_in_executor(
+                None,
+                lambda: user_proxy.initiate_chat(
+                    assistant,
+                    message=first_message,
+                    clear_history=True
+                )
+            )
+
+            # ── write any files the assistant produced ───────────────────────
+            files_created = []
+            pattern = re.compile(r"```(?:\w+)?\s*\n# filename: ([^\n]+)\n(.*?)```", re.DOTALL)
+            for m in pattern.finditer("\n".join(
+                m["content"] for m in chat_result.chat_history if m["name"] == "assistant"
+            )):
+                fname, code = m.group(1).strip(), m.group(2)
+                fpath = os.path.join(WORK_DIR, fname)
+                os.makedirs(os.path.dirname(fpath), exist_ok=True)
+                with open(fpath, "w", encoding="utf-8") as f:
+                    f.write(code)
+                files_created.append(fname)
+
+            # ── execute them (in worker thread too) ─────────────────────────
+            exec_out = await loop.run_in_executor(None, _run_all)
+
+            # ── send execution results back into the AutoGen conversation ──
+            if exec_out:
+                user_proxy.send(assistant, "Execution results:\n" + "\n\n".join(exec_out))
+
+            # ── last assistant message (after possible follow‑up) ───────────
+            final_reply = chat_result.chat_history[-1]["content"]
+            if len(final_reply) > 1900:
+                # split long reply into chunks
+                for chunk in [final_reply[i:i+1900] for i in range(0, len(final_reply), 1900)]:
+                    await msg.channel.send(chunk)
+            else:
+                await msg.channel.send(final_reply)
+
+        except Exception as e:
+            traceback.print_exc()
+            await msg.channel.send(f"⚠️  Internal error: {e}")
+
+# ── run the bot ───────────────────────────────────────────────────────────────
+if __name__ == "__main__":
     bot.run(DISCORD_BOT_TOKEN)
