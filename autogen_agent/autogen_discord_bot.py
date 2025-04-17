@@ -87,8 +87,10 @@ else:
 
 llm_config["config_list"] = config_list
 
-# 2) Create a local shell executor with full FS access
-WORK_DIR = os.path.abspath("agent_workspace")
+import os, sys
+# make WORK_DIR sit right next to this script
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+WORK_DIR = os.path.join(BASE_DIR, "agent_workspace")
 os.makedirs(WORK_DIR, exist_ok=True)
 
 executor = LocalCommandLineCodeExecutor(
@@ -176,8 +178,77 @@ async def on_message(message):
                         clear_history=True         # ✅ correct kwarg
                     )
                 )
-                print(f"AutoGen chat finished.")
+                print("AutoGen chat finished.")
 
+                # ——————————————— WRITE OUT ANY CODE BLOCKS ———————————————
+                import re
+                # gather all assistant replies
+                assistant_texts = []
+                for msg in chat_result.chat_history:
+                    if isinstance(msg, dict) and msg.get("name") == assistant.name:
+                        assistant_texts.append(msg.get("content", ""))
+
+                # find ``` blocks with "# filename: ..." and write them
+                files_written = []
+                pattern = re.compile(
+                    r"```(?:\w+)?\s*\n# filename: ([^\n]+)\n(.*?)```",
+                    re.DOTALL
+                )
+                for text in assistant_texts:
+                    for m in pattern.finditer(text):
+                        fname = m.group(1).strip()
+                        code  = m.group(2)
+                        fpath = os.path.join(WORK_DIR, fname)
+                        with open(fpath, "w", encoding="utf-8") as f:
+                            f.write(code)
+                        files_written.append(fname)
+
+                # prep the executed_outputs list with a note if we wrote files
+                import subprocess
+                executed_outputs = []
+                if files_written:
+                    executed_outputs.append(f"Wrote files: {', '.join(files_written)}")
+
+                # ——————————————— RUN ANY FILES THAT LANDED IN WORK_DIR ———————————————
+                # ——————————————————————————————————————————————————————
+                # 👷  Post‑processing: actually run any files the executor created
+                import subprocess
+                executed_outputs = []
+                for fname in sorted(os.listdir(WORK_DIR)):
+                    fpath = os.path.join(WORK_DIR, fname)
+                    # Python files: run non‑blocking for server.py, blocking otherwise
+                    if fname.endswith(".py"):
+                        if fname == "server.py":
+                            # start your HTTP server in the background
+                            proc = subprocess.Popen(
+                                [sys.executable, fpath],
+                                cwd=WORK_DIR,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                            )
+                            executed_outputs.append(f"Started `{fname}` as background process (pid {proc.pid})")
+                        else:
+                            out = subprocess.check_output(
+                                [sys.executable, fpath],
+                                cwd=WORK_DIR,
+                                stderr=subprocess.STDOUT,
+                            )
+                            executed_outputs.append(f"Output of `{fname}`:\n{out.decode().strip()}")
+
+                    # Shell scripts: run them to completion
+                    elif fname.endswith(".sh"):
+                        out = subprocess.check_output(
+                            ["bash", fpath],
+                            cwd=WORK_DIR,
+                            stderr=subprocess.STDOUT,
+                        )
+                        executed_outputs.append(f"Output of `{fname}`:\n{out.decode().strip()}")
+
+                # tack the results onto the end of the assistant’s final_response
+                final_response = ""
+                if executed_outputs:
+                    final_response += "\n\n**Execution results:**\n" + "\n\n".join(executed_outputs)
+                # ——————————————————————————————————————————————————————
                 # --- Extract Final Response (and check for saved file) ---
                 final_response = "Sorry, I couldn't generate a response for that." # Default
                 if chat_result and chat_result.chat_history:
