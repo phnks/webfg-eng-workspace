@@ -10,57 +10,63 @@ cd "$AGENT_HOME" || {
     exit 1
 }
 
-PID_FILE="$AGENT_HOME/agent.pid"
+# Tell the caller we're on it — then detach the real work
+echo "Agent stop initiated; shutting down in background…"
 
-# Check if PID file exists
-if [ ! -f "$PID_FILE" ]; then
-    echo "Agent does not appear to be running (no PID file found)."
-    # Double check if the process is running without a PID file (e.g., manual start)
-    # This part is optional but can be helpful
-    pgrep -f "python $AGENT_HOME/autogen_discord_bot.py" > /dev/null
-    if [ $? -eq 0 ]; then
-        echo "Warning: Found a running agent process without a PID file. Attempting to stop it..."
-        pkill -f "python $AGENT_HOME/autogen_discord_bot.py"
-        sleep 2
-        pgrep -f "python $AGENT_HOME/autogen_discord_bot.py" > /dev/null
-        if [ $? -ne 0 ]; then
-            echo "Agent process stopped."
-        else
-            echo "Error: Failed to stop the agent process found without a PID file."
-        fi
-    fi
-    exit 0
-fi
+nohup bash -c '
+  cd "$AGENT_HOME" || exit 1
 
-# Read PID and check if process is running
-PID=$(cat "$PID_FILE")
-if ! ps -p $PID > /dev/null; then
-    echo "Agent is not running (process $PID not found). Removing stale PID file."
-    rm "$PID_FILE"
-    exit 0
-fi
+  PID_FILE="$AGENT_HOME/agent.pid"
+  SCRIPT="$AGENT_HOME/autogen_discord_bot.py"
 
-# Attempt to stop the process
-echo "Stopping agent (PID $PID)..."
-kill $PID
-
-# Wait and check if stopped
-sleep 2
-if ps -p $PID > /dev/null; then
-    echo "Agent did not stop gracefully with kill $PID. Attempting force kill (SIGKILL)..."
-    kill -9 $PID
-    sleep 1
-    if ps -p $PID > /dev/null; then
-        echo "Error: Failed to stop agent (PID $PID) even with force kill."
-        exit 1
+  # If no PID file, try killing by matching python process
+  if [ ! -f "$PID_FILE" ]; then
+    echo "[stop_agent] No PID file; checking for stray process…" >&2
+    if pgrep -f "python $SCRIPT" >/dev/null; then
+      echo "[stop_agent] Found running agent without PID file; killing…" >&2
+      pkill -f "python $SCRIPT"
+      sleep 2
+      if ! pgrep -f "python $SCRIPT" >/dev/null; then
+        echo "[stop_agent] Agent process stopped."
+      else
+        echo "[stop_agent] ERROR: Still running after kill."
+      fi
     else
-        echo "Agent stopped forcefully."
+      echo "[stop_agent] Agent not running."
     fi
-else
-    echo "Agent stopped successfully."
-fi
+    exit 0
+  fi
 
-# Remove PID file
-rm "$PID_FILE"
-echo "Removed PID file."
+  # Read PID from file
+  PID="$(<"$PID_FILE")"
+  if ! ps -p "$PID" >/dev/null; then
+    echo "[stop_agent] Stale PID file ($PID); removing." >&2
+    rm -f "$PID_FILE"
+    exit 0
+  fi
+
+  # Attempt graceful stop
+  echo "[stop_agent] Stopping agent (PID $PID) …" >&2
+  kill "$PID"
+  sleep 2
+
+  if ps -p "$PID" >/dev/null; then
+    echo "[stop_agent] Did not stop; sending SIGKILL…" >&2
+    kill -9 "$PID"
+    sleep 1
+    if ps -p "$PID" >/dev/null; then
+      echo "[stop_agent] ERROR: Still running after SIGKILL." >&2
+      exit 1
+    else
+      echo "[stop_agent] Agent force‑killed."
+    fi
+  else
+    echo "[stop_agent] Agent stopped gracefully."
+  fi
+
+  # Clean up
+  rm -f "$PID_FILE"
+  echo "[stop_agent] PID file removed."
+' >/dev/null 2>&1 &
+
 exit 0
