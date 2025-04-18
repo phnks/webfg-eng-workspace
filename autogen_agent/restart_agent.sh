@@ -1,35 +1,28 @@
-#!/bin/bash
-
-AGENT_DIR=$(dirname "$0")
-cd "$AGENT_DIR" || exit 1
-
-STOP_SCRIPT="./stop_agent.sh"
-START_SCRIPT="./start_agent.sh"
-
-echo "Attempting to restart the agent..."
-
-# Stop the agent
-echo "--- Stopping Agent ---"
-bash "$STOP_SCRIPT"
-STOP_EXIT_CODE=$?
-if [ $STOP_EXIT_CODE -ne 0 ]; then
-    echo "Warning: Stop script exited with code $STOP_EXIT_CODE. Attempting to start anyway..."
-    # Optionally add more robust error handling here if needed
-fi
-echo "----------------------"
-
-# Wait a moment before starting
-sleep 2
-
-# Start the agent
-echo "--- Starting Agent ---"
-bash "$START_SCRIPT"
-START_EXIT_CODE=$?
-if [ $START_EXIT_CODE -ne 0 ]; then
-    echo "Error: Failed to start the agent during restart (exit code $START_EXIT_CODE)."
+#!/usr/bin/env bash
+if [[ -f "$AGENT_HOME" ]]; then
+    echo "❌  Could not locate AGENT_HOME" >&2
+    echo "    Checked: $AGENT_HOME" >&2
     exit 1
 fi
-echo "----------------------"
 
-echo "Agent restart process completed."
+cd "$AGENT_HOME" || {
+    echo "❌  cd \"$AGENT_HOME\" failed" >&2
+    exit 1
+}
+
+# Launch the real restart sequence in a completely detached process
+nohup bash -c '
+  echo "=== [restart_agent.sh] Background restart sequence starting ==="
+  sleep 4
+  echo "--- Stopping agent ---"
+  bash "'"$AGENT_HOME"'/stop_agent.sh"
+  echo "--- Waiting 2s before restart ---"
+  sleep 2
+  echo "--- Starting agent ---"
+  bash "'"$AGENT_HOME"'/start_agent.sh"
+  echo "=== [restart_agent.sh] Restart sequence complete ==="
+' >/dev/null 2>&1 &
+
+# Immediately return to the caller (your Discord bot)
+echo "Agent restart initiated! You should see me back online in a few seconds."
 exit 0

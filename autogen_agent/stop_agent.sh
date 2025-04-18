@@ -1,21 +1,28 @@
-#!/bin/bash
+#!/usr/bin/env bash
+if [[ -f "$AGENT_HOME" ]]; then
+    echo "❌  Could not locate AGENT_HOME" >&2
+    echo "    Checked: $AGENT_HOME" >&2
+    exit 1
+fi
 
-AGENT_DIR=$(dirname "$0")
-cd "$AGENT_DIR" || exit 1
+cd "$AGENT_HOME" || {
+    echo "❌  cd \"$AGENT_HOME\" failed" >&2
+    exit 1
+}
 
-PID_FILE="agent.pid"
+PID_FILE="$AGENT_HOME/agent.pid"
 
 # Check if PID file exists
 if [ ! -f "$PID_FILE" ]; then
     echo "Agent does not appear to be running (no PID file found)."
     # Double check if the process is running without a PID file (e.g., manual start)
     # This part is optional but can be helpful
-    pgrep -f "python $AGENT_DIR/autogen_discord_bot.py" > /dev/null
+    pgrep -f "python $AGENT_HOME/autogen_discord_bot.py" > /dev/null
     if [ $? -eq 0 ]; then
         echo "Warning: Found a running agent process without a PID file. Attempting to stop it..."
-        pkill -f "python $AGENT_DIR/autogen_discord_bot.py"
+        pkill -f "python $AGENT_HOME/autogen_discord_bot.py"
         sleep 2
-        pgrep -f "python $AGENT_DIR/autogen_discord_bot.py" > /dev/null
+        pgrep -f "python $AGENT_HOME/autogen_discord_bot.py" > /dev/null
         if [ $? -ne 0 ]; then
             echo "Agent process stopped."
         else

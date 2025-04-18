@@ -168,6 +168,16 @@ fi
 # --- Set Environment Variables for User (Run Every Time) ---
 # Ensure this runs even if the user already existed
 if [ -f "/home/$USERNAME/.bashrc" ]; then
+    # Untested code by chatgpt, may not yet work just needs some tweaks like paths
+    # put your helper scripts anywhere, e.g. /usr/local/bin
+    sudo cp status_agent.sh restart_agent.sh stop_agent.sh start_agent.sh /usr/local/bin
+    sudo chmod +x /usr/local/bin/agent_*.sh
+    echo 'anum ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/agent
+    echo 'homonculus ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/agent
+    sudo chmod 0440 /etc/sudoers.d/agent
+    grep -q '^AGENT_HOME=' /etc/environment \
+        || echo "AGENT_HOME=/home/anum/webfg-eng-workspace/autogen_agent" | sudo tee -a /etc/environment  #change to wherever we want the agent scripts to be ideally the agent doesn't have access to its own code
+
     # Check if the line already exists to avoid duplicates
     if ! grep -q 'export DEVCHAT_HOST_IP=10.0.2.2' "/home/$USERNAME/.bashrc"; then
         echo "Setting DEVCHAT_HOST_IP environment variable in /home/$USERNAME/.bashrc ..."

@@ -1,10 +1,11 @@
 # filename: autogen_discord_bot.py
 from __future__ import annotations
-import asyncio, builtins, logging, os, re, shlex, signal, subprocess, sys, textwrap
+import asyncio, builtins, logging, os, re, shlex, subprocess, sys, textwrap, getpass
 from pathlib import Path
-from typing import List
+from typing import List, Dict
 
-builtins.input = lambda _="": ""
+# ── basic setup ──────────────────────────────────────────────────────────────
+builtins.input = lambda *_: ""                         # prevent stdin blocking
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)s  %(name)s: %(message)s",
@@ -15,6 +16,18 @@ _LOG = logging.getLogger("discord‑bot")
 
 from dotenv import load_dotenv; load_dotenv()
 
+# ---------------------------------------------------------------------------
+# 1)  dynamic user / assistant name & workspace
+# ---------------------------------------------------------------------------
+BOT_USER = os.getenv("BOT_USER") or getpass.getuser()           # e.g. anum / homonculus
+HOME_DIR = Path(os.path.expanduser(f"~{BOT_USER}"))
+if not HOME_DIR.exists():
+    sys.exit(f"❌  HOME directory for '{BOT_USER}' not found: {HOME_DIR}")
+
+# ---------------------------------------------------------------------------
+# 2)  tokens & keys
+# ---------------------------------------------------------------------------
+AGENT_HOME = os.getenv("AGENT_HOME")
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 USE_GEMINI        = os.getenv("USE_GEMINI", "false").lower() == "true"
 OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY")
@@ -29,22 +42,36 @@ if USE_GEMINI and not GEMINI_API_KEYS:
 if not USE_GEMINI and not OPENAI_API_KEY:
     sys.exit("❌  Neither OPENAI_API_KEY nor USE_GEMINI=true provided")
 
+# ---------------------------------------------------------------------------
+# 3)  Gemini retry wrapper
+# ---------------------------------------------------------------------------
 if USE_GEMINI:
-    from gemini_retry_wrapper import GeminiRetryWrapper  # noqa: F401
+    from gemini_retry_wrapper import GeminiRetryWrapper
     import autogen.oai.gemini as _gm
     _gm.GeminiClient = _gm.Gemini = GeminiRetryWrapper
     GeminiRetryWrapper._KEYS = GEMINI_API_KEYS
 
+# ---------------------------------------------------------------------------
+# 4)  Autogen / Discord imports
+# ---------------------------------------------------------------------------
 import autogen
 from autogen.coding import LocalCommandLineCodeExecutor
 import discord
 
-BASE_DIR = Path(__file__).resolve().parent
-WORK_DIR = BASE_DIR / "agent_workspace"
-WORK_DIR.mkdir(exist_ok=True)
+# ---------------------------------------------------------------------------
+# 5)  workspace & executor  (docker off where supported)
+# ---------------------------------------------------------------------------
+_EXECUTOR_KW: Dict[str, object] = dict(work_dir=str(HOME_DIR), timeout=300)
+try:
+    executor = LocalCommandLineCodeExecutor(**_EXECUTOR_KW, docker=False)
+except TypeError:
+    executor = LocalCommandLineCodeExecutor(**_EXECUTOR_KW)
+    _LOG.warning("'docker' keyword not supported by this Autogen version – "
+                 "container isolation already disabled by default.")
 
-executor = LocalCommandLineCodeExecutor(work_dir=str(WORK_DIR), timeout=300)
-
+# ---------------------------------------------------------------------------
+# 6)  LLM config
+# ---------------------------------------------------------------------------
 llm_config = {
     "temperature": 0.7,
     "cache_seed": None,
@@ -58,21 +85,20 @@ llm_config = {
 }
 
 assistant = autogen.AssistantAgent(
-    name="assistant",
+    name=BOT_USER,
     llm_config=llm_config,
     system_message=textwrap.dedent(
-        """
-        You are an autonomous coding‑assistant running inside a Discord bot.
-        You have full shell access in `agent_workspace/` (read / write / exec).
+        f"""
+        You are **{BOT_USER}**, an autonomous coding‑assistant running inside a Discord bot.
+        Your working directory is `{HOME_DIR}` but you have root‑level access
+        to the whole VM.
 
         • ALWAYS run real commands – never simulate.
-        • If you need a long‑running server, start it with:
-              nohup <command> >server.log 2>&1 & disown
+        • For long‑running servers start them with
+              nohup <cmd> >server.log 2>&1 & disown
 
-        Wrap code in ``` … ``` with “# filename: …” on the first line.
-        When the entire task is finished output exactly:
-
-            TERMINATE
+        Wrap any code in ``` with “# filename: …” on the first line.
+        When completely finished output exactly **TERMINATE**.
         """
     ).strip(),
 )
@@ -80,14 +106,17 @@ assistant = autogen.AssistantAgent(
 user_proxy = autogen.UserProxyAgent(
     name="user_proxy",
     human_input_mode="NEVER",
-    max_consecutive_auto_reply=0,          # ← stop the blank echoes
-    default_auto_reply="TERMINATE",        # ← belt‑and‑braces
+    max_consecutive_auto_reply=0,          # ←‑‑ original cure
+    default_auto_reply="TERMINATE",        # ←‑‑ belt‑and‑braces
     is_termination_msg=lambda m: (
         m.get("content", "").strip().upper() in {"TERMINATE", "TASK COMPLETE", "DONE"}
     ),
     code_execution_config={"executor": executor},
 )
 
+# ---------------------------------------------------------------------------
+# 7)  Discord glue
+# ---------------------------------------------------------------------------
 intents = discord.Intents.default()
 intents.message_content = True
 bot = discord.Client(intents=intents)
@@ -96,6 +125,17 @@ _channel_locks: dict[int, asyncio.Lock] = {}
 _current_tasks: dict[int, asyncio.Task] = {}
 _spawned_pids: set[int] = set()
 
+RUN_AS_ROOT = os.geteuid() == 0
+SUDO: list[str] = [] if RUN_AS_ROOT else ["sudo", "-n"]
+
+def _run(cmd: list[str] | str, **kw):
+    if isinstance(cmd, str):
+        cmd = shlex.split(cmd)
+    return subprocess.check_output(SUDO + cmd, **kw)
+
+# ---------------------------------------------------------------------------
+# 8)  background server handling (unchanged)
+# ---------------------------------------------------------------------------
 _SERVER_PATTERNS = [
     re.compile(r"python3?\s+-m\s+http\.server\s+\d+", re.I),
     re.compile(r"flask\s+run\b", re.I),
@@ -105,8 +145,8 @@ _SERVER_PATTERNS = [
 
 def _spawn_daemon(cmd: str) -> int:
     proc = subprocess.Popen(
-        shlex.split(cmd.split("&")[0].strip()),
-        cwd=WORK_DIR,
+        SUDO + shlex.split(cmd.split("&")[0].strip()),
+        cwd="/",
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
@@ -115,36 +155,35 @@ def _spawn_daemon(cmd: str) -> int:
     _LOG.info("🌐 spawned daemon: %s  (pid %d)", cmd, proc.pid)
     return proc.pid
 
-def _strip_server_lines(script: str) -> tuple[str, list[str]]:
-    kept, spawned = [], []
-    for line in script.splitlines():
-        if any(p.search(line) for p in _SERVER_PATTERNS):
-            spawned.append(line)
-        else:
-            kept.append(line)
-    return "\n".join(kept) + "\n", spawned
+def _run_all() -> List[str]:
+    results: List[str] = []
 
-def _run_all() -> list[str]:
-    results: list[str] = []
-
-    for path in WORK_DIR.glob("*.sh"):
-        cleaned, to_spawn = _strip_server_lines(path.read_text())
-        if to_spawn:
-            path.write_text(cleaned)
-            for cmd in to_spawn:
+    # scan *.sh for server‑starting lines
+    for path in HOME_DIR.glob("*.sh"):
+        txt = path.read_text()
+        kept, spawned = [], []
+        for ln in txt.splitlines():
+            if any(p.search(ln) for p in _SERVER_PATTERNS):
+                spawned.append(ln)
+            else:
+                kept.append(ln)
+        if spawned:
+            path.write_text("\n".join(kept) + "\n")
+            for cmd in spawned:
                 pid = _spawn_daemon(cmd)
                 results.append(f"🌐 Started background server “{cmd.strip()}” (pid {pid})")
 
-    for path in WORK_DIR.iterdir():
+    # run the remaining scripts
+    for path in HOME_DIR.iterdir():
         fname = path.name
         try:
             if fname.endswith(".sh"):
-                out = subprocess.check_output(["bash", str(path)],
-                                              cwd=WORK_DIR, stderr=subprocess.STDOUT, timeout=30)
+                out = _run(["bash", str(path)], cwd=path.parent,
+                           stderr=subprocess.STDOUT, timeout=30)
                 results.append(f"✅ {fname} exited 0\n{out.decode() or '(no output)'}")
             elif fname.endswith(".py") and fname != "server.py":
-                out = subprocess.check_output([sys.executable, str(path)],
-                                              cwd=WORK_DIR, stderr=subprocess.STDOUT, timeout=30)
+                out = _run([sys.executable, str(path)], cwd=path.parent,
+                           stderr=subprocess.STDOUT, timeout=30)
                 results.append(f"✅ {fname} exited 0\n{out.decode() or '(no output)'}")
             elif fname == "server.py":
                 pid = _spawn_daemon(f"python3 {fname}")
@@ -155,106 +194,154 @@ def _run_all() -> list[str]:
             results.append(f"❌ {fname} exited {exc.returncode}\n{exc.output.decode()}")
     return results
 
-def _last_assistant_content(history: list[dict]) -> str:
-    for msg in reversed(history):
-        if msg.get("name") == "assistant" and msg.get("content", "").strip():
-            return msg["content"]
+def _last_assistant_content(hist: List[dict]) -> str:
+    for m in reversed(hist):
+        if m.get("name") == BOT_USER and m.get("content", "").strip():
+            return m["content"]
     return ""
 
-async def _send_long_msg(channel: discord.abc.Messageable, text: str) -> None:
-    for chunk in [text[i:i+1900] for i in range(0, len(text), 1900)]:
-        await channel.send(chunk)
+async def _send_long(ch: discord.abc.Messageable, txt: str):
+    for chunk in [txt[i:i+1900] for i in range(0, len(txt), 1900)]:
+        await ch.send(chunk)
 
-async def _handle_request(channel: discord.abc.Messageable, content: str) -> None:
-    lock = _channel_locks.setdefault(channel.id, asyncio.Lock())
+# ---------------------------------------------------------------------------
+# 9)  host slash‑commands  (unchanged)
+# ---------------------------------------------------------------------------
+def _handle_host_cmd(cmd: str, args: List[str]) -> tuple[str, str]:
+    if cmd == "status":
+        out = _run("/usr/local/bin/status_agent.sh").decode()
+        return ("Agent status", out or "(no output)")
+    if cmd == "restart":
+        out = _run("/usr/local/bin/restart_agent.sh").decode()
+        return ("Agent restarted", out or "(no output)")
+    if cmd == "stop":
+        out = _run("/usr/local/bin/stop_agent.sh").decode()
+        return ("Agent stopped", out or "(no output)")
+    if cmd == "logs":
+        n = int(args[0]) if args else 50
+        out = _run(["tail", "-n", str(n), f"{AGENT_HOME}/agent.log"]).decode()
+        return (f"Last {n} log lines", out or "(empty)")
+    if cmd == "interrupt":
+        return ("", "")
+    raise ValueError(cmd)
+
+# ---------------------------------------------------------------------------
+# 10)  main request handler (unchanged)
+# ---------------------------------------------------------------------------
+async def _handle_request(ch: discord.abc.Messageable, content: str):
+    lock = _channel_locks.setdefault(ch.id, asyncio.Lock())
     async with lock:
         try:
-            await channel.typing()
+            await ch.typing()
 
             header = textwrap.dedent(
-                """
-                Your name is **Homonculus**.
-                You have full shell access in this sandbox VM (`agent_workspace/`).
+                f"""
+                Your name is **{BOT_USER}**.
+                You have full root shell on this VM (start dir `{HOME_DIR}`).
 
                 • read / write / exec any file
-                • run any CLI command (non‑interactive)
-                • If you need a long‑running server use
-                    `nohup … >server.log 2>&1 & disown`
+                • run any CLI command
+                • For servers:  nohup … >server.log 2>&1 & disown
 
-                NEVER simulate commands – **always** run them for real.
-                Wrap code in triple‑back‑ticks, first line `# filename: …`
-                When the task is complete output **TERMINATE**.
+                NEVER simulate commands – always run them.
+                Wrap code in triple‑back‑ticks (# filename: … on 1st line).
+                When finished output **TERMINATE**.
                 """
             ).strip()
-
-            first_msg = f"{header}\n\n{content}"
 
             loop = asyncio.get_running_loop()
             chat_result = await loop.run_in_executor(
                 None,
                 lambda: user_proxy.initiate_chat(
-                    assistant, message=first_msg, clear_history=True
+                    assistant, message=f"{header}\n\n{content}", clear_history=True
                 )
             )
 
-            pattern = re.compile(r"```(?:\w+)?\s*\n# filename: ([^\n]+)\n(.*?)```", re.DOTALL)
-            files_written = False
-            assistant_msgs = [m["content"] for m in chat_result.chat_history if m["name"] == "assistant"]
-            for m in pattern.finditer("\n".join(assistant_msgs)):
+            # save files if any
+            pat = re.compile(r"```(?:\w+)?\s*\n# filename: ([^\n]+)\n(.*?)```", re.DOTALL)
+            assistant_msgs = [m["content"] for m in chat_result.chat_history
+                              if m["name"] == BOT_USER]
+            wrote = False
+            for m in pat.finditer("\n".join(assistant_msgs)):
                 fname, code = m.group(1).strip(), m.group(2)
-                path = WORK_DIR / fname
+                path = (HOME_DIR / fname).expanduser()
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(code)
-                files_written = True
+                wrote = True
 
-            if files_written:
+            if wrote:
                 exec_out = await loop.run_in_executor(None, _run_all)
                 if exec_out:
-                    user_proxy.send("Execution results:\n" + "\n\n".join(exec_out),
-                                    recipient=assistant)
-            # grab the last *non‑empty* assistant message so we never forward
-            # the blank echo that UserProxy may add at the tail of history
-            reply = _last_assistant_content(chat_result.chat_history)
+                    # ← do NOT block the event‑loop; run in a worker thread
+                    await loop.run_in_executor(
+                        None,
+                        lambda: user_proxy.send(
+                            "Execution results:\n" + "\n\n".join(exec_out),
+                            recipient=assistant,
+                        ),
+                    )
 
-            if not reply.strip():
-                reply = "⚠️  No reply generated (empty turn filtered)."
-
-            await _send_long_msg(channel, reply)
+            reply = _last_assistant_content(chat_result.chat_history) or \
+                    "⚠️  No reply generated (empty turn filtered)."
+            await _send_long(ch, reply)
 
         except asyncio.CancelledError:
-            await channel.send("🚫  Task cancelled.")
+            await ch.send("🚫  Task cancelled.")
             raise
         except Exception as exc:
-            _LOG.error("Error in handler: %s", exc, exc_info=True)
-            await channel.send(f"⚠️  Internal error: {exc}")
+            _LOG.error("Handler error: %s", exc, exc_info=True)
+            await ch.send(f"⚠️  Internal error: {exc}")
 
+# ---------------------------------------------------------------------------
+# 11)  Discord event handlers (unchanged)
+# ---------------------------------------------------------------------------
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user} (discord {discord.__version__})  "
-          f"AutoGen {autogen.__version__}")
+          f"AutoGen {autogen.__version__} – HOME={HOME_DIR}")
 
 @bot.event
-async def on_message(message: discord.Message):
-    if message.author == bot.user:
+async def on_message(msg: discord.Message):
+    if msg.author == bot.user:
         return
 
-    if message.content.strip().lower() in {"!cancel", "!abort"}:
-        task = _current_tasks.get(message.channel.id)
-        if task and not task.done():
-            task.cancel()
-            await message.channel.send("🚫  Current task cancelled.")
-        else:
-            await message.channel.send("⚠️  No running task to cancel.")
+    # Slash‑commands
+    if msg.content.startswith("/"):
+        parts = msg.content[1:].split()
+        cmd, args = parts[0].lower(), parts[1:]
+
+        if cmd == "interrupt":
+            task = _current_tasks.get(msg.channel.id)
+            if task and not task.done():
+                task.cancel()
+                await msg.channel.send("🚫  Current task cancelled.")
+            else:
+                await msg.channel.send("⚠️  No running task to cancel.")
+            return
+
+        try:
+            title, output = _handle_host_cmd(cmd, args)
+            await _send_long(msg.channel, f"**{title}**\n```\n{output}\n```")
+        except ValueError:
+            await msg.channel.send(f"⚠️  Unknown command: /{cmd}")
+        except subprocess.CalledProcessError as exc:
+            await _send_long(msg.channel,
+                f"❌ command failed (exit {exc.returncode})\n```\n{exc.output.decode()}\n```")
         return
 
-    lock = _channel_locks.setdefault(message.channel.id, asyncio.Lock())
+    # Normal assistant interaction
+    lock = _channel_locks.setdefault(msg.channel.id, asyncio.Lock())
     if lock.locked():
-        await message.channel.send("⏳ Busy – please wait or type **!cancel**.")
+        await msg.channel.send("⏳ Busy – please wait or type **/interrupt**.")
         return
 
-    task = asyncio.create_task(_handle_request(message.channel, message.content))
-    _current_tasks[message.channel.id] = task
-    task.add_done_callback(lambda _: _current_tasks.pop(message.channel.id, None))
+    t = asyncio.create_task(_handle_request(msg.channel, msg.content))
+    _current_tasks[msg.channel.id] = t
+    t.add_done_callback(lambda *_:
+        _current_tasks.pop(msg.channel.id, None))
 
+# ---------------------------------------------------------------------------
+# 12)  run the bot
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     bot.run(DISCORD_BOT_TOKEN)
