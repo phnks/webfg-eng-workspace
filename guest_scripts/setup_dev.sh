@@ -226,49 +226,39 @@ else
     echo "Ensure the vm_cli directory is present in the project root and synced."
 fi
 
+# --- Install Correct VirtualBox Guest Additions (7.0.x) ---
+echo ">>> Installing VirtualBox Guest Additions (target: 7.0.x)..."
 
-# --- Install Correct VirtualBox Guest Additions ---
-echo ">>> Installing VirtualBox Guest Additions (target: 6.1.50)..."
-# Install prerequisites for building kernel modules (might be redundant but ensures they are present)
+# ensure build tools & headers are present
 apt-get install -y build-essential dkms linux-headers-$(uname -r)
 
-# Download the correct Guest Additions ISO
-# Using 6.1.50 as it matches the DKMS version installed on the host via apt
-GA_VERSION="6.1.50"
+# pick your exact 7.0 version here (match the host: e.g. 7.0.26)
+GA_VERSION="7.0.26"
 GA_ISO="VBoxGuestAdditions_${GA_VERSION}.iso"
 GA_URL="https://download.virtualbox.org/virtualbox/${GA_VERSION}/${GA_ISO}"
-ISO_MOUNT_POINT="/mnt/iso"
+ISO_MOUNT_POINT="/mnt/vbox_ga"
 
 echo "Downloading Guest Additions ISO from ${GA_URL}..."
-wget -q -O "/tmp/${GA_ISO}" "${GA_URL}"
-if [ $? -ne 0 ]; then
-    echo "Error: Failed to download Guest Additions ISO. Skipping installation."
-else
-    echo "Mounting Guest Additions ISO..."
-    mkdir -p "${ISO_MOUNT_POINT}"
-    mount "/tmp/${GA_ISO}" "${ISO_MOUNT_POINT}" -o loop
+wget -q -O "/tmp/${GA_ISO}" "${GA_URL}" || {
+  echo "Error: failed to download ${GA_ISO}"; exit 1
+}
 
-    if [ $? -ne 0 ]; then
-        echo "Error: Failed to mount Guest Additions ISO. Skipping installation."
-    else
-        echo "Running Guest Additions installer..."
-        # Use --nox11 because this script runs non-interactively.
-        # The --force flag is not valid for 6.1.50 installer. It might prompt or handle overwrite automatically.
-        if /bin/sh "${ISO_MOUNT_POINT}/VBoxLinuxAdditions.run" --nox11; then
-             echo "Guest Additions installation script finished."
-             # Check the log file for specific success/failure messages if needed
-        else
-             echo "Warning: Guest Additions installation script execution failed. Check /var/log/vboxadd-setup.log"
-        fi
+echo "Mounting Guest Additions ISO..."
+mkdir -p "${ISO_MOUNT_POINT}"
+mount -o loop "/tmp/${GA_ISO}" "${ISO_MOUNT_POINT}" || {
+  echo "Error: failed to mount ${GA_ISO}"; exit 1
+}
 
-        echo "Cleaning up Guest Additions ISO..."
-        umount "${ISO_MOUNT_POINT}" || echo "Warning: Failed to unmount ISO."
-    fi
-    rm -f "/tmp/${GA_ISO}"
-    rmdir "${ISO_MOUNT_POINT}" || echo "Warning: Failed to remove mount point dir."
-fi
-# --- End Guest Additions Install ---
+echo "Running Guest Additions installer..."
+sh "${ISO_MOUNT_POINT}/VBoxLinuxAdditions.run" --nox11 || {
+  echo "Warning: VBoxLinuxAdditions.run exited non‑zero; check /var/log/vboxadd-setup.log"
+}
 
+echo "Cleaning up..."
+umount "${ISO_MOUNT_POINT}"
+rm -rf "${ISO_MOUNT_POINT}" "/tmp/${GA_ISO}"
+
+echo ">>> Guest Additions 7.0.x installation complete."
 
 # Clean up apt cache
 apt-get clean

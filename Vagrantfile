@@ -24,7 +24,7 @@ Vagrant.configure("2") do |config|
     # Configure the VirtualBox provider
     machine_config.vm.provider "virtualbox" do |vb|
       # Enable the GUI for the VM
-      vb.gui = true
+      vb.gui = true #or false for headless mode
 
       # Customize VM resources (adjust as needed)
       vb.memory = "8192" # Allocate 8GB RAM
