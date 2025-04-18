@@ -1,207 +1,260 @@
-import autogen
-import discord
-import os
-import asyncio
-from dotenv import load_dotenv
+# filename: autogen_discord_bot.py
+from __future__ import annotations
+import asyncio, builtins, logging, os, re, shlex, signal, subprocess, sys, textwrap
+from pathlib import Path
+from typing import List
 
-# Load environment variables
-load_dotenv()
+builtins.input = lambda _="": ""
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)s  %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+    stream=sys.stderr,
+)
+_LOG = logging.getLogger("discord‑bot")
+
+from dotenv import load_dotenv; load_dotenv()
+
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-# --- Basic Input Validation ---
+USE_GEMINI        = os.getenv("USE_GEMINI", "false").lower() == "true"
+OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEYS: List[str] = (
+    [k.strip() for k in os.getenv("GEMINI_API_KEYS", "").split(",") if k.strip()]
+    or ([os.getenv("GEMINI_API_KEY").strip()] if os.getenv("GEMINI_API_KEY") else [])
+)
 if not DISCORD_BOT_TOKEN:
-    print("Error: DISCORD_BOT_TOKEN not found in .env file.")
-    exit(1)
-if not OPENAI_API_KEY:
-    print("Error: OPENAI_API_KEY not found in .env file.")
-    # AutoGen might still work with a local model if configured,
-    # but for OpenAI integration, this is needed.
-    # We'll proceed but log a warning.
-    print("Warning: OPENAI_API_KEY not found. OpenAI features will be unavailable unless configured otherwise.")
-    # For now, let's assume we need OpenAI and exit if not found for simplicity in this initial setup.
-    # If you have a different LLM config, adjust this check.
-    exit(1)
+    sys.exit("❌  DISCORD_BOT_TOKEN missing in .env")
+if USE_GEMINI and not GEMINI_API_KEYS:
+    sys.exit("❌  USE_GEMINI=true but no Gemini key(s) provided")
+if not USE_GEMINI and not OPENAI_API_KEY:
+    sys.exit("❌  Neither OPENAI_API_KEY nor USE_GEMINI=true provided")
 
+if USE_GEMINI:
+    from gemini_retry_wrapper import GeminiRetryWrapper  # noqa: F401
+    import autogen.oai.gemini as _gm
+    _gm.GeminiClient = _gm.Gemini = GeminiRetryWrapper
+    GeminiRetryWrapper._KEYS = GEMINI_API_KEYS
 
-# --- AutoGen Configuration ---
-config_list = [
-    {
-        'model': 'gpt-3.5-turbo', # Changed from gpt-4 as per user request
-        'api_key': OPENAI_API_KEY,
-    }
-]
+import autogen
+from autogen.coding import LocalCommandLineCodeExecutor
+import discord
+
+BASE_DIR = Path(__file__).resolve().parent
+WORK_DIR = BASE_DIR / "agent_workspace"
+WORK_DIR.mkdir(exist_ok=True)
+
+executor = LocalCommandLineCodeExecutor(work_dir=str(WORK_DIR), timeout=300)
 
 llm_config = {
-    "config_list": config_list,
-    "cache_seed": 42, # Use None for no caching
     "temperature": 0.7,
+    "cache_seed": None,
+    "config_list": [
+        {
+            "model": "gemini-2.5-flash-preview-04-17" if USE_GEMINI else "gpt-3.5-turbo",
+            "api_key": GEMINI_API_KEYS[0] if USE_GEMINI else OPENAI_API_KEY,
+            "api_type": "google" if USE_GEMINI else "openai",
+        }
+    ],
 }
 
-# --- AutoGen Agents ---
-# Assistant Agent: The AI that performs tasks
 assistant = autogen.AssistantAgent(
     name="assistant",
     llm_config=llm_config,
-    system_message="You are a helpful AI assistant. Respond to the user's query."
+    system_message=textwrap.dedent(
+        """
+        You are an autonomous coding‑assistant running inside a Discord bot.
+        You have full shell access in `agent_workspace/` (read / write / exec).
+
+        • ALWAYS run real commands – never simulate.
+        • If you need a long‑running server, start it with:
+              nohup <command> >server.log 2>&1 & disown
+
+        Wrap code in ``` … ``` with “# filename: …” on the first line.
+        When the entire task is finished output exactly:
+
+            TERMINATE
+        """
+    ).strip(),
 )
 
-# User Proxy Agent: Represents the user, initiates chat, and can execute code
-# We need a way to capture the final response to send back to Discord.
-# We'll modify how the chat is initiated or use a custom agent later if needed.
-# For now, the Discord bot will handle getting the response.
 user_proxy = autogen.UserProxyAgent(
-   name="user_proxy",
-   human_input_mode="NEVER", # No human intervention needed in this setup
-   max_consecutive_auto_reply=8, # Increased from 5
-   is_termination_msg=lambda x: x.get("content", "").rstrip().endswith("TERMINATE"),
-   code_execution_config=False, # Disable code execution for safety unless needed
-   # llm_config=llm_config, # Optional: User proxy can also use LLM
-   # system_message="""Reply TERMINATE if the task has been solved at full satisfaction. Otherwise, reply CONTINUE, or the reason why the task is not solved yet."""
+    name="user_proxy",
+    human_input_mode="NEVER",
+    max_consecutive_auto_reply=0,          # ← stop the blank echoes
+    default_auto_reply="TERMINATE",        # ← belt‑and‑braces
+    is_termination_msg=lambda m: (
+        m.get("content", "").strip().upper() in {"TERMINATE", "TASK COMPLETE", "DONE"}
+    ),
+    code_execution_config={"executor": executor},
 )
 
-
-# --- Discord Bot Setup ---
 intents = discord.Intents.default()
-intents.message_content = True # Enable message content intent
-client = discord.Client(intents=intents)
+intents.message_content = True
+bot = discord.Client(intents=intents)
 
-# Dictionary to store active conversations per channel
-# Key: channel_id, Value: asyncio.Lock to prevent concurrent processing
-channel_locks = {}
+_channel_locks: dict[int, asyncio.Lock] = {}
+_current_tasks: dict[int, asyncio.Task] = {}
+_spawned_pids: set[int] = set()
 
-@client.event
-async def on_ready():
-    print(f'Logged in as {client.user}')
-    print('------')
-    print(f'Discord.py version: {discord.__version__}')
-    print('Bot is ready and listening for messages.')
+_SERVER_PATTERNS = [
+    re.compile(r"python3?\s+-m\s+http\.server\s+\d+", re.I),
+    re.compile(r"flask\s+run\b", re.I),
+    re.compile(r"node\s+\S+\.js\b", re.I),
+    re.compile(r"(npm|pnpm|yarn)\s+(run\s+)?start\b", re.I),
+]
 
-@client.event
-async def on_message(message):
-    # Ignore messages from the bot itself
-    if message.author == client.user:
-        return
+def _spawn_daemon(cmd: str) -> int:
+    proc = subprocess.Popen(
+        shlex.split(cmd.split("&")[0].strip()),
+        cwd=WORK_DIR,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    _spawned_pids.add(proc.pid)
+    _LOG.info("🌐 spawned daemon: %s  (pid %d)", cmd, proc.pid)
+    return proc.pid
 
-    # Only respond to direct mentions or messages in specific channels (optional)
-    # For simplicity, let's respond to any message in any channel the bot is in.
-    # Add channel/mention checks here if needed.
+def _strip_server_lines(script: str) -> tuple[str, list[str]]:
+    kept, spawned = [], []
+    for line in script.splitlines():
+        if any(p.search(line) for p in _SERVER_PATTERNS):
+            spawned.append(line)
+        else:
+            kept.append(line)
+    return "\n".join(kept) + "\n", spawned
 
-    print(f"Received message from {message.author} in #{message.channel}: {message.content}")
+def _run_all() -> list[str]:
+    results: list[str] = []
 
-    # --- Prevent Concurrent Processing per Channel ---
-    lock = channel_locks.get(message.channel.id)
-    if lock is None:
-        lock = asyncio.Lock()
-        channel_locks[message.channel.id] = lock
+    for path in WORK_DIR.glob("*.sh"):
+        cleaned, to_spawn = _strip_server_lines(path.read_text())
+        if to_spawn:
+            path.write_text(cleaned)
+            for cmd in to_spawn:
+                pid = _spawn_daemon(cmd)
+                results.append(f"🌐 Started background server “{cmd.strip()}” (pid {pid})")
 
-    if lock.locked():
-        await message.channel.send("I'm currently processing another request in this channel. Please wait a moment.")
-        return
+    for path in WORK_DIR.iterdir():
+        fname = path.name
+        try:
+            if fname.endswith(".sh"):
+                out = subprocess.check_output(["bash", str(path)],
+                                              cwd=WORK_DIR, stderr=subprocess.STDOUT, timeout=30)
+                results.append(f"✅ {fname} exited 0\n{out.decode() or '(no output)'}")
+            elif fname.endswith(".py") and fname != "server.py":
+                out = subprocess.check_output([sys.executable, str(path)],
+                                              cwd=WORK_DIR, stderr=subprocess.STDOUT, timeout=30)
+                results.append(f"✅ {fname} exited 0\n{out.decode() or '(no output)'}")
+            elif fname == "server.py":
+                pid = _spawn_daemon(f"python3 {fname}")
+                results.append(f"🌐 Started server.py (pid {pid})")
+        except subprocess.TimeoutExpired:
+            results.append(f"⏱️  {fname} timed‑out after 30 s")
+        except subprocess.CalledProcessError as exc:
+            results.append(f"❌ {fname} exited {exc.returncode}\n{exc.output.decode()}")
+    return results
 
+def _last_assistant_content(history: list[dict]) -> str:
+    for msg in reversed(history):
+        if msg.get("name") == "assistant" and msg.get("content", "").strip():
+            return msg["content"]
+    return ""
+
+async def _send_long_msg(channel: discord.abc.Messageable, text: str) -> None:
+    for chunk in [text[i:i+1900] for i in range(0, len(text), 1900)]:
+        await channel.send(chunk)
+
+async def _handle_request(channel: discord.abc.Messageable, content: str) -> None:
+    lock = _channel_locks.setdefault(channel.id, asyncio.Lock())
     async with lock:
         try:
-            # Show typing indicator
-            async with message.channel.typing():
-                # --- Initiate AutoGen Chat ---
-                # We need a way to capture the response from the AutoGen conversation.
-                # One way is to create a temporary custom agent or modify the user_proxy
-                # to store the last message, or parse the chat history.
+            await channel.typing()
 
-                # Let's try initiating the chat and capturing the last message.
-                chat_history = [] # Store conversation history if needed
+            header = textwrap.dedent(
+                """
+                Your name is **Homonculus**.
+                You have full shell access in this sandbox VM (`agent_workspace/`).
 
-                # Define a function to capture the *first* assistant message
-                # We need a flag or check within the scope of the on_message handler
-                # to ensure we only capture the first relevant reply.
-                # Let's reset this variable for each new Discord message received.
-                first_assistant_message_captured = None
+                • read / write / exec any file
+                • run any CLI command (non‑interactive)
+                • If you need a long‑running server use
+                    `nohup … >server.log 2>&1 & disown`
 
-                def capture_first_assistant_message_hook(recipient, messages, sender, config):
-                    nonlocal first_assistant_message_captured
-                    # Only capture if it's from the assistant and we haven't captured one yet for this interaction
-                    if sender.name == assistant.name and first_assistant_message_captured is None:
-                        if messages and isinstance(messages, list):
-                            # Get the last message dictionary (which is the current message being processed by the hook)
-                            current_msg = messages[-1]
-                            # Extract content, handle potential None or missing 'content'
-                            content = current_msg.get('content')
-                            if content:
-                                first_assistant_message_captured = str(content).strip()
-                                print(f"DEBUG: Hook captured FIRST message from {sender.name}: {first_assistant_message_captured}") # Debug print
-                            else:
-                                # Handle cases where content might be missing or different structure
-                                first_assistant_message_captured = f"Received a message structure without standard content: {current_msg}"
-                                print(f"DEBUG: Hook captured FIRST message structure (no content) from {sender.name}: {first_assistant_message_captured}") # Debug print
-                        elif isinstance(messages, str): # Sometimes messages might be simple strings
-                            first_assistant_message_captured = messages.strip()
-                            print(f"DEBUG: Hook captured FIRST message (string) from {sender.name}: {first_assistant_message_captured}") # Debug print
+                NEVER simulate commands – **always** run them for real.
+                Wrap code in triple‑back‑ticks, first line `# filename: …`
+                When the task is complete output **TERMINATE**.
+                """
+            ).strip()
 
-                    # Still print subsequent messages for debugging, but don't overwrite the captured one
-                    elif sender.name == assistant.name:
-                         current_content = messages[-1].get('content') if isinstance(messages, list) else messages
-                         print(f"DEBUG: Hook saw SUBSEQUENT message from {sender.name}: {str(current_content).strip()}")
+            first_msg = f"{header}\n\n{content}"
 
-                    return False, None # Return False to continue the conversation, None indicates no reply from hook
-
-
-                # Register the hook - this might capture intermediate messages too.
-                # A better approach might be needed depending on AutoGen's flow.
-                # Let's try registering it on the user_proxy to see what it gets before termination.
-                user_proxy.register_reply(
-                    [autogen.Agent, None], # Triggered by messages from any agent or termination
-                    reply_func=capture_first_assistant_message_hook, # Use the new hook function
-                    config={}, # No specific config needed for this hook
-                    reset_config=False, # Keep the hook registered
+            loop = asyncio.get_running_loop()
+            chat_result = await loop.run_in_executor(
+                None,
+                lambda: user_proxy.initiate_chat(
+                    assistant, message=first_msg, clear_history=True
                 )
+            )
 
+            pattern = re.compile(r"```(?:\w+)?\s*\n# filename: ([^\n]+)\n(.*?)```", re.DOTALL)
+            files_written = False
+            assistant_msgs = [m["content"] for m in chat_result.chat_history if m["name"] == "assistant"]
+            for m in pattern.finditer("\n".join(assistant_msgs)):
+                fname, code = m.group(1).strip(), m.group(2)
+                path = WORK_DIR / fname
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(code)
+                files_written = True
 
-                print(f"Initiating AutoGen chat for: {message.content}")
-                # Initiate the chat between user_proxy and assistant
-                user_proxy.initiate_chat(
-                    assistant,
-                    message=message.content,
-                    # clear_history=True # Start fresh for each Discord message
-                )
-                print(f"AutoGen chat finished.")
+            if files_written:
+                exec_out = await loop.run_in_executor(None, _run_all)
+                if exec_out:
+                    user_proxy.send("Execution results:\n" + "\n\n".join(exec_out),
+                                    recipient=assistant)
+            # grab the last *non‑empty* assistant message so we never forward
+            # the blank echo that UserProxy may add at the tail of history
+            reply = _last_assistant_content(chat_result.chat_history)
 
-                # Unregister hook after chat (optional, depends if you want it persistent)
-                # user_proxy.reset() # Resets hooks and other state
+            if not reply.strip():
+                reply = "⚠️  No reply generated (empty turn filtered)."
 
-                # --- Send Response Back to Discord ---
-                # Use the variable that captured the *first* assistant message
-                if first_assistant_message_captured:
-                    print(f"Attempting to send final captured response to Discord channel {message.channel.id}: '{first_assistant_message_captured}'") # Use the correct variable
-                    # Discord has a message length limit (2000 characters)
-                    if len(first_assistant_message_captured) > 2000:
-                        print(f"Response length ({len(first_assistant_message_captured)}) exceeds 2000 chars. Sending preamble.")
-                        await message.channel.send("The response is too long to display completely.")
-                        # Send in chunks or as a file if needed
-                        parts = [first_assistant_message_captured[i:i+1990] for i in range(0, len(first_assistant_message_captured), 1990)]
-                        for i, part in enumerate(parts):
-                            print(f"Sending part {i+1}/{len(parts)} of long response.")
-                            await message.channel.send(f"```{part}```") # Send as code block for readability
-                    else:
-                        print(f"Sending short response (length {len(first_assistant_message_captured)}).")
-                        await message.channel.send(first_assistant_message_captured) # Use the correct variable
-                    print("Finished sending response to Discord.")
-                else:
-                    print("No first assistant response captured from AutoGen hook to send.") # Updated log message
-                    await message.channel.send("Sorry, I couldn't generate a response for that.")
+            await _send_long_msg(channel, reply)
 
-        except Exception as e:
-            print(f"An error occurred: {e}")
-            await message.channel.send(f"An error occurred while processing your request: {e}")
-        finally:
-            # Ensure lock is released even if errors occur (though `async with` handles this)
-            # Lock is automatically released by `async with`
-            pass
+        except asyncio.CancelledError:
+            await channel.send("🚫  Task cancelled.")
+            raise
+        except Exception as exc:
+            _LOG.error("Error in handler: %s", exc, exc_info=True)
+            await channel.send(f"⚠️  Internal error: {exc}")
 
+@bot.event
+async def on_ready():
+    print(f"✅ Logged in as {bot.user} (discord {discord.__version__})  "
+          f"AutoGen {autogen.__version__}")
 
-# --- Run the Bot ---
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author == bot.user:
+        return
+
+    if message.content.strip().lower() in {"!cancel", "!abort"}:
+        task = _current_tasks.get(message.channel.id)
+        if task and not task.done():
+            task.cancel()
+            await message.channel.send("🚫  Current task cancelled.")
+        else:
+            await message.channel.send("⚠️  No running task to cancel.")
+        return
+
+    lock = _channel_locks.setdefault(message.channel.id, asyncio.Lock())
+    if lock.locked():
+        await message.channel.send("⏳ Busy – please wait or type **!cancel**.")
+        return
+
+    task = asyncio.create_task(_handle_request(message.channel, message.content))
+    _current_tasks[message.channel.id] = task
+    task.add_done_callback(lambda _: _current_tasks.pop(message.channel.id, None))
+
 if __name__ == "__main__":
-    if DISCORD_BOT_TOKEN and OPENAI_API_KEY: # Only run if keys are present
-        print("Starting Discord bot...")
-        client.run(DISCORD_BOT_TOKEN)
-    else:
-        print("Bot cannot start due to missing API keys in .env file.")
+    bot.run(DISCORD_BOT_TOKEN)
