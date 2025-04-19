@@ -175,8 +175,68 @@ if [ -f "/home/$USERNAME/.bashrc" ]; then
     echo 'anum ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/agent
     echo 'homonculus ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/agent
     sudo chmod 0440 /etc/sudoers.d/agent
-    grep -q '^AGENT_HOME=' /etc/environment \
+
+    grep -q '^AGENT_HOME='/etc/environment \
         || echo "AGENT_HOME=/home/anum/webfg-eng-workspace/autogen_agent" | sudo tee -a /etc/environment  #change to wherever we want the agent scripts to be ideally the agent doesn't have access to its own code
+    if ! grep -q 'export AGENT_HOME=/home/anum/webfg-eng-workspace/autogen_agent' "/home/$USERNAME/.bashrc"; then
+        echo "Setting AGENT_HOME environment variable in /home/$USERNAME/.bashrc ..."
+        echo '' >> "/home/$USERNAME/.bashrc" # Add a newline for separation
+        echo '# Set autogen agent home directory' >> "/home/$USERNAME/.bashrc"
+        echo 'export AGENT_HOME=/home/anum/webfg-eng-workspace/autogen_agent' >> "/home/$USERNAME/.bashrc"
+        # Ownership should be correct if user exists or was just created
+    else
+         echo "AGENT_HOME already set in /home/$USERNAME/.bashrc."
+    fi
+
+    # Untested code by chatgpt
+    # 1. Export your GitHub username and PAT into env vars
+    GIT_USERNAME=phnks
+    GIT_TOKEN=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
+    grep -q '^GIT_USERNAME='/etc/environment \
+        || echo "GIT_USERNAME=$GIT_USERNAME" | sudo tee -a /etc/environment
+    if ! grep -q "export GIT_USERNAME=$GIT_USERNAME" "/home/$USERNAME/.bashrc"; then
+        echo "Setting GIT_USERNAME environment variable in /home/$USERNAME/.bashrc ..."
+        echo '' >> "/home/$USERNAME/.bashrc" # Add a newline for separation
+        echo '# Set git username' >> "/home/$USERNAME/.bashrc"
+        echo "export GIT_USERNAME=$GIT_USERNAME" >> "/home/$USERNAME/.bashrc"
+        # Ownership should be correct if user exists or was just created
+    else
+         echo "GIT_USERNAME already set in /home/$USERNAME/.bashrc."
+    fi
+
+    grep -q '^GIT_TOKEN='/etc/environment \
+        || echo "GIT_TOKEN=$GIT_TOKEN" | sudo tee -a /etc/environment
+    if ! grep -q "export GIT_TOKEN=$GIT_TOKEN" "/home/$USERNAME/.bashrc"; then
+        echo "Setting GIT_TOKEN environment variable in /home/$USERNAME/.bashrc ..."
+        echo '' >> "/home/$USERNAME/.bashrc" # Add a newline for separation
+        echo '# Set git token' >> "/home/$USERNAME/.bashrc"
+        echo "export GIT_TOKEN=$GIT_TOKEN" >> "/home/$USERNAME/.bashrc"
+        # Ownership should be correct if user exists or was just created
+    else
+         echo "GIT_TOKEN already set in /home/$USERNAME/.bashrc."
+    fi
+
+    # 2. Tell git to store (and re‑use) your HTTPS creds
+    git config --global credential.helper "store --file ~/.git-credentials"
+
+    # 3. Populate the credentials file
+    cat > ~/.git-credentials <<< "https://${GIT_USERNAME}:${GIT_TOKEN}@github.com"
+
+    # 4. Lock it down
+    chmod 600 ~/.git-credentials
+
+    # 5. Export the same token for the GitHub CLI
+    grep -q '^GH_TOKEN='/etc/environment \
+        || echo "GH_TOKEN=$GIT_TOKEN" | sudo tee -a /etc/environment
+    if ! grep -q "export GH_TOKEN=$GIT_TOKEN" "/home/$USERNAME/.bashrc"; then
+        echo "Setting GH_TOKEN environment variable in /home/$USERNAME/.bashrc ..."
+        echo '' >> "/home/$USERNAME/.bashrc" # Add a newline for separation
+        echo '# Set gh cli token' >> "/home/$USERNAME/.bashrc"
+        echo "export GH_TOKEN=GIT_TOKEN" >> "/home/$USERNAME/.bashrc"
+        # Ownership should be correct if user exists or was just created
+    else
+         echo "GH_TOKEN already set in /home/$USERNAME/.bashrc."
+    fi
 
     # Check if the line already exists to avoid duplicates
     if ! grep -q 'export DEVCHAT_HOST_IP=10.0.2.2' "/home/$USERNAME/.bashrc"; then
@@ -189,7 +249,7 @@ if [ -f "/home/$USERNAME/.bashrc" ]; then
          echo "DEVCHAT_HOST_IP already set in /home/$USERNAME/.bashrc."
     fi
 else
-    echo "Warning: /home/$USERNAME/.bashrc not found. Cannot set DEVCHAT_HOST_IP."
+    echo "Warning: /home/$USERNAME/.bashrc not found. Cannot set user env variables."
 fi
 
 

@@ -10,6 +10,8 @@ cd "$AGENT_HOME" || {
     exit 1
 }
 
+echo $AGENT_HOME
+
 PID_FILE="$AGENT_HOME/agent.pid"
 LOG_FILE="$AGENT_HOME/agent.log"
 VENV_PATH="$AGENT_HOME/venv/bin/activate"

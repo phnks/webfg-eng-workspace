@@ -13,11 +13,11 @@ cd "$AGENT_HOME" || {
 # Launch the real restart sequence in a completely detached process
 nohup bash -c '
   echo "=== [restart_agent.sh] Background restart sequence starting ==="
-  sleep 4
+  sleep 5
   echo "--- Stopping agent ---"
   bash "'"$AGENT_HOME"'/stop_agent.sh"
-  echo "--- Waiting 2s before restart ---"
-  sleep 2
+  echo "--- Waiting 5s before restart ---"
+  sleep 5
   echo "--- Starting agent ---"
   bash "'"$AGENT_HOME"'/start_agent.sh"
   echo "=== [restart_agent.sh] Restart sequence complete ==="

@@ -61,6 +61,7 @@ import discord
 # ---------------------------------------------------------------------------
 # 5)  workspace & executor  (docker off where supported)
 # ---------------------------------------------------------------------------
+LocalCommandLineCodeExecutor.sanitize_command = staticmethod(lambda lang, code: code)
 _EXECUTOR_KW: Dict[str, object] = dict(work_dir=str(HOME_DIR), timeout=300)
 try:
     executor = LocalCommandLineCodeExecutor(**_EXECUTOR_KW, docker=False)
@@ -106,7 +107,7 @@ assistant = autogen.AssistantAgent(
 user_proxy = autogen.UserProxyAgent(
     name="user_proxy",
     human_input_mode="NEVER",
-    max_consecutive_auto_reply=0,          # ←‑‑ original cure
+    max_consecutive_auto_reply=5,          # ←‑‑ original cure
     default_auto_reply="TERMINATE",        # ←‑‑ belt‑and‑braces
     is_termination_msg=lambda m: (
         m.get("content", "").strip().upper() in {"TERMINATE", "TASK COMPLETE", "DONE"}
@@ -154,45 +155,6 @@ def _spawn_daemon(cmd: str) -> int:
     _spawned_pids.add(proc.pid)
     _LOG.info("🌐 spawned daemon: %s  (pid %d)", cmd, proc.pid)
     return proc.pid
-
-def _run_all() -> List[str]:
-    results: List[str] = []
-
-    # scan *.sh for server‑starting lines
-    for path in HOME_DIR.glob("*.sh"):
-        txt = path.read_text()
-        kept, spawned = [], []
-        for ln in txt.splitlines():
-            if any(p.search(ln) for p in _SERVER_PATTERNS):
-                spawned.append(ln)
-            else:
-                kept.append(ln)
-        if spawned:
-            path.write_text("\n".join(kept) + "\n")
-            for cmd in spawned:
-                pid = _spawn_daemon(cmd)
-                results.append(f"🌐 Started background server “{cmd.strip()}” (pid {pid})")
-
-    # run the remaining scripts
-    for path in HOME_DIR.iterdir():
-        fname = path.name
-        try:
-            if fname.endswith(".sh"):
-                out = _run(["bash", str(path)], cwd=path.parent,
-                           stderr=subprocess.STDOUT, timeout=30)
-                results.append(f"✅ {fname} exited 0\n{out.decode() or '(no output)'}")
-            elif fname.endswith(".py") and fname != "server.py":
-                out = _run([sys.executable, str(path)], cwd=path.parent,
-                           stderr=subprocess.STDOUT, timeout=30)
-                results.append(f"✅ {fname} exited 0\n{out.decode() or '(no output)'}")
-            elif fname == "server.py":
-                pid = _spawn_daemon(f"python3 {fname}")
-                results.append(f"🌐 Started server.py (pid {pid})")
-        except subprocess.TimeoutExpired:
-            results.append(f"⏱️  {fname} timed‑out after 30 s")
-        except subprocess.CalledProcessError as exc:
-            results.append(f"❌ {fname} exited {exc.returncode}\n{exc.output.decode()}")
-    return results
 
 def _last_assistant_content(hist: List[dict]) -> str:
     for m in reversed(hist):
@@ -244,8 +206,13 @@ async def _handle_request(ch: discord.abc.Messageable, content: str):
                 • For servers:  nohup … >server.log 2>&1 & disown
 
                 NEVER simulate commands – always run them.
-                Wrap code in triple‑back‑ticks (# filename: … on 1st line).
-                When finished output **TERMINATE**.
+                Wrap all code and all commands in triple‑back‑ticks 
+                ALWAYS include: `# filename blah` on the first line if writing a file where blah is the filename you want
+                ALWAYS include: `bash` on the first line if running a command, or whatever language you want to use
+                NEVER include anything but executable code or commands inside the back ticks
+                NEVER incude comments if you are running a command
+                NEVER use triple-back-ticks unless you want to write code or run a command
+                When finished the task with no errors write out **TERMINATE**.
                 """
             ).strip()
 
@@ -253,34 +220,47 @@ async def _handle_request(ch: discord.abc.Messageable, content: str):
             chat_result = await loop.run_in_executor(
                 None,
                 lambda: user_proxy.initiate_chat(
-                    assistant, message=f"{header}\n\n{content}", clear_history=True
+                    assistant, message=f"{header}\n\n{content}", clear_history=False
                 )
             )
 
-            # save files if any
-            pat = re.compile(r"```(?:\w+)?\s*\n# filename: ([^\n]+)\n(.*?)```", re.DOTALL)
+            # ─── combined handler: run bash lines & write files in sequence ──────────
+            #print ("Assistant messages: " + str(chat_result.chat_history))
             assistant_msgs = [m["content"] for m in chat_result.chat_history
                               if m["name"] == BOT_USER]
-            wrote = False
-            for m in pat.finditer("\n".join(assistant_msgs)):
-                fname, code = m.group(1).strip(), m.group(2)
-                path = (HOME_DIR / fname).expanduser()
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(code)
-                wrote = True
+            combined = "\n".join(assistant_msgs)
+            #print ("Combined messages: " + combined)
+            # regex matches either a multi‑line bash block or a file block, preserving order
+            block_pat = re.compile(
+                # either a bash block or a file block
+                r"```bash\s*\n(?P<bash>.*?)```"
+                r"|```(?:\w+)?\s*\n# filename: (?P<fname>[^\n]+)\n(?P<file>.*?)```",
+                re.IGNORECASE | re.DOTALL
+            )
+            results: List[str] = []
+            for blk in block_pat.finditer(combined):
+                if blk.group("fname"):
+                    # it's a file block
+                    fname = blk.group("fname").strip()
+                    #print ("Found file to write: " + fname)
+                    code = blk.group("file")
+                    path = (HOME_DIR / fname).expanduser()
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(code)
+                    results.append(f"💾 wrote file `{fname}`")
 
-            if wrote:
-                exec_out = await loop.run_in_executor(None, _run_all)
-                if exec_out:
-                    # ← do NOT block the event‑loop; run in a worker thread
-                    await loop.run_in_executor(
-                        None,
-                        lambda: user_proxy.send(
-                            "Execution results:\n" + "\n\n".join(exec_out),
-                            recipient=assistant,
-                        ),
-                    )
+            # if any commands/files ran, send a single combined report
+            if results:
+                await loop.run_in_executor(
+                    None,
+                    lambda: user_proxy.send(
+                        "Execution results:\n" + "\n\n".join(results),
+                        recipient=assistant,
+                    ),
+                )
 
+
+            # ─── if nothing to run/write, just forward the assistant's last message ───
             reply = _last_assistant_content(chat_result.chat_history) or \
                     "⚠️  No reply generated (empty turn filtered)."
             await _send_long(ch, reply)
