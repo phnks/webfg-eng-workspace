@@ -87,7 +87,7 @@ assistant = autogen.AssistantAgent(
 user_proxy = autogen.UserProxyAgent(
     name="user_proxy",
     human_input_mode="NEVER",
-    max_consecutive_auto_reply=5,
+    max_consecutive_auto_reply=500,
     default_auto_reply="TERMINATE",
     is_termination_msg=lambda m: m.get("content", "").strip().upper() in {"TERMINATE", "DONE"},
     code_execution_config={"executor": executor},
@@ -109,7 +109,9 @@ async def _send_long(ch: discord.abc.Messageable, txt: str):
         await ch.send(chunk)
 
 RUN_AS_ROOT = os.geteuid() == 0
-SUDO: list[str] = [] if RUN_AS_ROOT else ["sudo", "-n"]
+# Use plain 'sudo' instead of 'sudo -n' to avoid potential non-interactive failures,
+# assuming passwordless sudo is configured or the script runs as root.
+SUDO: list[str] = [] if RUN_AS_ROOT else ["sudo"]
 
 def _run(cmd: list[str] | str, **kw):
     if isinstance(cmd, str):

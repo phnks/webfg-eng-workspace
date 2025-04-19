@@ -14,6 +14,7 @@ cd "$AGENT_HOME" || {
 echo "Agent stop initiated; shutting down in background…"
 
 nohup bash -c '
+  sleep 5
   cd "$AGENT_HOME" || exit 1
 
   PID_FILE="$AGENT_HOME/agent.pid"

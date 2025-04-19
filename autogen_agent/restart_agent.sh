@@ -16,8 +16,8 @@ nohup bash -c '
   sleep 5
   echo "--- Stopping agent ---"
   bash "'"$AGENT_HOME"'/stop_agent.sh"
-  echo "--- Waiting 5s before restart ---"
-  sleep 5
+  echo "--- Waiting 10s before restart ---"
+  sleep 10
   echo "--- Starting agent ---"
   bash "'"$AGENT_HOME"'/start_agent.sh"
   echo "=== [restart_agent.sh] Restart sequence complete ==="
