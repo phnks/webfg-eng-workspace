@@ -62,6 +62,12 @@ import discord
 class EnhancedLocalExecutor(LocalCommandLineCodeExecutor):
     KNOWN_LANGUAGES = {"bash", "shell", "sh", "python", "pwsh", "powershell", "ps1", "html", "css", "javascript", "js"}
 
+    @staticmethod
+    def sanitize_command(lang: str, code: str) -> None:
+        """Overrides the default command sanitization to allow all commands."""
+        # Do nothing, effectively disabling sanitization.
+        pass
+
     def execute_code_blocks(self, code_blocks: List[CodeBlock]) -> CommandLineCodeResult:
         """Executes code blocks with enhanced logging and unknown language handling."""
         log_messages = []
