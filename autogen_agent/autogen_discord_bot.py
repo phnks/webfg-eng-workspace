@@ -16,6 +16,16 @@ _LOG = logging.getLogger("discord-bot")
 
 from dotenv import load_dotenv; load_dotenv()
 
+# -- Verify crucial Git/GH tokens are loaded --
+_GIT_USERNAME = os.getenv("GIT_USERNAME")
+_GIT_TOKEN = os.getenv("GIT_TOKEN")
+_GH_TOKEN = os.getenv("GH_TOKEN")
+if not all([_GIT_USERNAME, _GIT_TOKEN, _GH_TOKEN]):
+    _LOG.warning("⚠️ Git/GitHub environment variables (GIT_USERNAME, GIT_TOKEN, GH_TOKEN) not fully set. Git/GH operations might fail. Ensure they are in the .env file.")
+else:
+    _LOG.info("✅ Git/GitHub environment variables loaded.")
+
+
 # ---------------------------------------------------------------------------
 # 1) dynamic user/assistant name & workspace
 # ---------------------------------------------------------------------------
@@ -56,17 +66,67 @@ from autogen.coding import LocalCommandLineCodeExecutor, CodeBlock
 from autogen.coding.base import CommandLineCodeResult # Try importing from base
 import discord
 
+# --- Monkey-patching to disable command sanitization ---
+# Define a function that does nothing, matching the original signature
+def _disabled_sanitize_command(lang: str, code: str) -> None:
+    """Replacement for sanitize_command that does nothing."""
+    pass
+
+# Replace the static method on the original class
+# WARNING: This is a global change and carries risks if the library updates
+# or if other parts of the code unexpectedly rely on the original sanitization.
+LocalCommandLineCodeExecutor.sanitize_command = _disabled_sanitize_command
+_LOG.warning("⚠️ Monkey-patched LocalCommandLineCodeExecutor.sanitize_command to disable safety checks.")
+# --- End Monkey-patching ---
+
+
 # ---------------------------------------------------------------------------
 # 5) Enhanced Executor with Logging
 # ---------------------------------------------------------------------------
 class EnhancedLocalExecutor(LocalCommandLineCodeExecutor):
-    KNOWN_LANGUAGES = {"bash", "shell", "sh", "python", "pwsh", "powershell", "ps1", "html", "css", "javascript", "js"}
+    # No longer need the sanitize_command override here, as the base class is patched.
+    # Expanded list of common languages
+    KNOWN_LANGUAGES = {
+        # Shells
+        "bash", "shell", "sh", "zsh", "ksh", "fish",
+        # Scripting
+        "python", "python3", "py",
+        "javascript", "js", "nodejs", "node",
+        "typescript", "ts",
+        "ruby", "rb",
+        "perl", "pl",
+        "php",
+        "lua",
+        "groovy",
+        # PowerShell
+        "powershell", "pwsh", "ps1",
+        # Web
+        "html", "htm",
+        "css",
+        "json",
+        "yaml", "yml",
+        "xml",
+        # Compiled
+        "c", "cpp", "c++",
+        "java",
+        "csharp", "cs",
+        "go", "golang",
+        "rust", "rs",
+        "swift",
+        "kotlin", "kt",
+        "scala",
+        "objective-c", "objc",
+        # Data/DB
+        "sql",
+        "r",
+        # Other
+        "makefile",
+        "dockerfile",
+        "markdown", "md",
+        "text", "txt", "", # Allow empty language tag as plain text/default shell
+        # Add any other languages frequently encountered by the agent
+    }
 
-    @staticmethod
-    def sanitize_command(lang: str, code: str) -> None:
-        """Overrides the default command sanitization to allow all commands."""
-        # Do nothing, effectively disabling sanitization.
-        pass
 
     def execute_code_blocks(self, code_blocks: List[CodeBlock]) -> CommandLineCodeResult:
         """Executes code blocks with enhanced logging and unknown language handling."""
