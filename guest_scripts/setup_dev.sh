@@ -218,6 +218,8 @@ if [ -f "/home/$USERNAME/.bashrc" ]; then
 
     # 2. Tell git to store (and re‑use) your HTTPS creds
     git config --global credential.helper "store --file ~/.git-credentials"
+    git config --global user.email "$USERNAME@email.com"
+    git config --global user.name "$USERNAME"
 
     # 3. Populate the credentials file
     cat > ~/.git-credentials <<< "https://${GIT_USERNAME}:${GIT_TOKEN}@github.com"
