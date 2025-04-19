@@ -53,9 +53,77 @@ if USE_GEMINI:
 # ---------------------------------------------------------------------------
 import autogen
 from autogen.coding import LocalCommandLineCodeExecutor, CodeBlock
+from autogen.coding.base import CommandLineCodeResult # Try importing from base
 import discord
 
-executor = LocalCommandLineCodeExecutor(work_dir=str(HOME_DIR), timeout=300)
+# ---------------------------------------------------------------------------
+# 5) Enhanced Executor with Logging
+# ---------------------------------------------------------------------------
+class EnhancedLocalExecutor(LocalCommandLineCodeExecutor):
+    KNOWN_LANGUAGES = {"bash", "shell", "sh", "python", "pwsh", "powershell", "ps1", "html", "css", "javascript", "js"}
+
+    def execute_code_blocks(self, code_blocks: List[CodeBlock]) -> CommandLineCodeResult:
+        """Executes code blocks with enhanced logging and unknown language handling."""
+        log_messages = []
+        exit_codes = []
+        outputs = []
+        for block in code_blocks:
+            # Correct attribute access from .lang to .language
+            # Correct attribute access from .lang to .language
+            language = block.language.lower()
+            code = block.code
+
+            _LOG.debug(f"Attempting execution for language '{language}':\n---\n{code}\n---")
+
+            if language not in self.KNOWN_LANGUAGES:
+                # Format the skip message to include the command clearly for the agent output
+                skip_output = f"Skipped command (unknown language '{language}'):\n```\n{code}\n```"
+                _LOG.warning(skip_output)
+                # Append a non-zero exit code and the formatted skip message as output
+                exit_codes.append(1) # Indicate failure/skip
+                outputs.append(skip_output) # Add formatted skip message to outputs
+                log_messages.append(skip_output) # Also log it
+                continue # Skip to the next block
+
+            # Execute known language block using the parent method for a single block
+            # This assumes the parent method can handle a list with one item.
+            try:
+                # We call the super method with a list containing only the current block
+                single_block_result: CommandLineCodeResult = super().execute_code_blocks([block])
+                _LOG.debug(f"Execution result (Exit Code {single_block_result.exit_code}):\n---\n{single_block_result.output}\n---")
+                exit_codes.append(single_block_result.exit_code)
+                # Prepend the executed code to the output for the agent
+                formatted_output = f"Executed command:\n```\n{code}\n```\nOutput:\n{single_block_result.output}"
+                outputs.append(formatted_output)
+                # Assuming log file path might be in the result, or construct one if needed
+                # For simplicity, we'll just use the output as the log message here.
+                # Update log message to use 'language'
+                log_messages.append(f"Executed {language} block. Exit Code: {single_block_result.exit_code}\nOutput:\n{single_block_result.output}") # Keep log simple
+            except Exception as e:
+                # Update error message to use 'language' and include code for agent output
+                error_output = f"Error executing command:\n```\n{code}\n```\nError:\n{e}"
+                _LOG.error(f"Error executing {language} block: {e}\nCode:\n---\n{code}\n---", exc_info=True) # Keep detailed log
+                exit_codes.append(1) # Indicate failure
+                outputs.append(error_output) # Add formatted error to outputs
+                log_messages.append(error_output) # Also log it
+
+
+        # Combine results. We need to decide how to aggregate exit codes.
+        # Let's return 0 only if all blocks succeeded (exit code 0).
+        final_exit_code = 0
+        if any(ec != 0 for ec in exit_codes):
+            final_exit_code = 1 # Or perhaps the first non-zero exit code? Let's use 1 for simplicity.
+
+        # Combine outputs and log messages
+        final_output = "\n---\n".join(outputs)
+        # The original CommandLineCodeResult might have a specific log file.
+        # We are creating a synthetic result here. Adjust if the actual class structure differs.
+        # Let's assume log_file_path isn't strictly needed or can be None.
+        return CommandLineCodeResult(exit_code=final_exit_code, output=final_output) # Removed log_file_path
+
+
+executor = EnhancedLocalExecutor(work_dir=str(HOME_DIR), timeout=300)
+
 
 # ---------------------------------------------------------------------------
 # 6) LLM config
