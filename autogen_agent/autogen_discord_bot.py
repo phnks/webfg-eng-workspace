@@ -188,7 +188,10 @@ class EnhancedLocalExecutor(LocalCommandLineCodeExecutor):
         return CommandLineCodeResult(exit_code=final_exit_code, output=final_output) # Removed log_file_path
 
 
-executor = EnhancedLocalExecutor(work_dir=str(HOME_DIR), timeout=300)
+# Set timeout to a very large value (e.g., 24 hours) instead of None to avoid TypeError
+# This effectively disables the timeout for practical purposes.
+_24_HOURS_IN_SECONDS = 24 * 60 * 60
+executor = EnhancedLocalExecutor(work_dir=str(HOME_DIR), timeout=_24_HOURS_IN_SECONDS)
 
 
 # ---------------------------------------------------------------------------
