@@ -1,12 +1,21 @@
-#!/bin/bash
+#!/usr/bin/env bash
+if [[ -f "$AGENT_HOME" ]]; then
+    echo "❌  Could not locate AGENT_HOME" >&2
+    echo "    Checked: $AGENT_HOME" >&2
+    exit 1
+fi
 
-AGENT_DIR=$(dirname "$0")
-cd "$AGENT_DIR" || exit 1
+cd "$AGENT_HOME" || {
+    echo "❌  cd \"$AGENT_HOME\" failed" >&2
+    exit 1
+}
 
-PID_FILE="agent.pid"
-LOG_FILE="agent.log"
-VENV_PATH="venv/bin/activate"
-SCRIPT_NAME="autogen_discord_bot.py"
+echo $AGENT_HOME
+
+PID_FILE="$AGENT_HOME/agent.pid"
+LOG_FILE="$AGENT_HOME/agent.log"
+VENV_PATH="$AGENT_HOME/venv/bin/activate"
+SCRIPT_NAME="$AGENT_HOME/autogen_discord_bot.py"
 
 # Check if already running
 if [ -f "$PID_FILE" ]; then

@@ -1,260 +1,379 @@
 # filename: autogen_discord_bot.py
 from __future__ import annotations
-import asyncio, builtins, logging, os, re, shlex, signal, subprocess, sys, textwrap
+import asyncio, builtins, logging, os, re, shlex, subprocess, sys, textwrap, getpass
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Any
 
-builtins.input = lambda _="": ""
+# ── basic setup ──────────────────────────────────────────────────────────────
+builtins.input = lambda *_: ""  # prevent stdin blocking
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)s  %(name)s: %(message)s",
     datefmt="%H:%M:%S",
     stream=sys.stderr,
 )
-_LOG = logging.getLogger("discord‑bot")
+_LOG = logging.getLogger("discord-bot")
 
 from dotenv import load_dotenv; load_dotenv()
 
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-USE_GEMINI        = os.getenv("USE_GEMINI", "false").lower() == "true"
-OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY")
-GEMINI_API_KEYS: List[str] = (
-    [k.strip() for k in os.getenv("GEMINI_API_KEYS", "").split(",") if k.strip()]
-    or ([os.getenv("GEMINI_API_KEY").strip()] if os.getenv("GEMINI_API_KEY") else [])
-)
-if not DISCORD_BOT_TOKEN:
-    sys.exit("❌  DISCORD_BOT_TOKEN missing in .env")
-if USE_GEMINI and not GEMINI_API_KEYS:
-    sys.exit("❌  USE_GEMINI=true but no Gemini key(s) provided")
-if not USE_GEMINI and not OPENAI_API_KEY:
-    sys.exit("❌  Neither OPENAI_API_KEY nor USE_GEMINI=true provided")
+# -- Verify crucial Git/GH tokens are loaded --
+_GIT_USERNAME = os.getenv("GIT_USERNAME")
+_GIT_TOKEN = os.getenv("GIT_TOKEN")
+_GH_TOKEN = os.getenv("GH_TOKEN")
+if not all([_GIT_USERNAME, _GIT_TOKEN, _GH_TOKEN]):
+    _LOG.warning("⚠️ Git/GitHub environment variables (GIT_USERNAME, GIT_TOKEN, GH_TOKEN) not fully set. Git/GH operations might fail. Ensure they are in the .env file.")
+else:
+    _LOG.info("✅ Git/GitHub environment variables loaded.")
 
+
+# ---------------------------------------------------------------------------
+# 1) dynamic user/assistant name & workspace
+# ---------------------------------------------------------------------------
+BOT_USER = os.getenv("BOT_USER") or getpass.getuser()
+HOME_DIR = Path(os.path.expanduser(f"~{BOT_USER}"))
+if not HOME_DIR.exists():
+    sys.exit(f"❌ HOME directory for '{BOT_USER}' not found: {HOME_DIR}")
+
+# ---------------------------------------------------------------------------
+# 2) tokens & keys
+# ---------------------------------------------------------------------------
+AGENT_HOME = os.getenv("AGENT_HOME")
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+USE_GEMINI = os.getenv("USE_GEMINI", "false").lower() == "true"
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEYS: List[str] = [k.strip() for k in os.getenv("GEMINI_API_KEYS", "").split(",") if k.strip()]
+if not DISCORD_BOT_TOKEN:
+    sys.exit("❌ DISCORD_BOT_TOKEN missing in .env")
+if USE_GEMINI and not GEMINI_API_KEYS:
+    sys.exit("❌ USE_GEMINI=true but no Gemini key(s) provided")
+if not USE_GEMINI and not OPENAI_API_KEY:
+    sys.exit("❌ Neither OPENAI_API_KEY nor USE_GEMINI=true provided")
+
+# ---------------------------------------------------------------------------
+# 3) Gemini retry wrapper
+# ---------------------------------------------------------------------------
 if USE_GEMINI:
-    from gemini_retry_wrapper import GeminiRetryWrapper  # noqa: F401
+    from gemini_retry_wrapper import GeminiRetryWrapper
     import autogen.oai.gemini as _gm
     _gm.GeminiClient = _gm.Gemini = GeminiRetryWrapper
     GeminiRetryWrapper._KEYS = GEMINI_API_KEYS
 
+# ---------------------------------------------------------------------------
+# 4) Autogen / Discord imports
+# ---------------------------------------------------------------------------
 import autogen
-from autogen.coding import LocalCommandLineCodeExecutor
+from autogen.coding import LocalCommandLineCodeExecutor, CodeBlock
+from autogen.coding.base import CommandLineCodeResult # Try importing from base
 import discord
 
-BASE_DIR = Path(__file__).resolve().parent
-WORK_DIR = BASE_DIR / "agent_workspace"
-WORK_DIR.mkdir(exist_ok=True)
+# --- Monkey-patching to disable command sanitization ---
+# Define a function that does nothing, matching the original signature
+def _disabled_sanitize_command(lang: str, code: str) -> None:
+    """Replacement for sanitize_command that does nothing."""
+    pass
 
-executor = LocalCommandLineCodeExecutor(work_dir=str(WORK_DIR), timeout=300)
+# Replace the static method on the original class
+# WARNING: This is a global change and carries risks if the library updates
+# or if other parts of the code unexpectedly rely on the original sanitization.
+LocalCommandLineCodeExecutor.sanitize_command = _disabled_sanitize_command
+_LOG.warning("⚠️ Monkey-patched LocalCommandLineCodeExecutor.sanitize_command to disable safety checks.")
+# --- End Monkey-patching ---
 
+
+# ---------------------------------------------------------------------------
+# 5) Enhanced Executor with Logging
+# ---------------------------------------------------------------------------
+class EnhancedLocalExecutor(LocalCommandLineCodeExecutor):
+    # No longer need the sanitize_command override here, as the base class is patched.
+    # Expanded list of common languages
+    KNOWN_LANGUAGES = {
+        # Shells
+        "bash", "shell", "sh", "zsh", "ksh", "fish",
+        # Scripting
+        "python", "python3", "py",
+        "javascript", "js", "nodejs", "node",
+        "typescript", "ts",
+        "ruby", "rb",
+        "perl", "pl",
+        "php",
+        "lua",
+        "groovy",
+        # PowerShell
+        "powershell", "pwsh", "ps1",
+        # Web
+        "html", "htm",
+        "css",
+        "json",
+        "yaml", "yml",
+        "xml",
+        # Compiled
+        "c", "cpp", "c++",
+        "java",
+        "csharp", "cs",
+        "go", "golang",
+        "rust", "rs",
+        "swift",
+        "kotlin", "kt",
+        "scala",
+        "objective-c", "objc",
+        # Data/DB
+        "sql",
+        "r",
+        # Other
+        "makefile",
+        "dockerfile",
+        "markdown", "md",
+        "text", "txt", "", # Allow empty language tag as plain text/default shell
+        # Add any other languages frequently encountered by the agent
+    }
+
+
+    def execute_code_blocks(self, code_blocks: List[CodeBlock]) -> CommandLineCodeResult:
+        """Executes code blocks with enhanced logging and unknown language handling."""
+        log_messages = []
+        exit_codes = []
+        outputs = []
+        for block in code_blocks:
+            # Correct attribute access from .lang to .language
+            # Correct attribute access from .lang to .language
+            language = block.language.lower()
+            code = block.code
+
+            _LOG.debug(f"Attempting execution for language '{language}':\n---\n{code}\n---")
+
+            if language not in self.KNOWN_LANGUAGES:
+                # Format the skip message to include the command clearly for the agent output
+                skip_output = f"Skipped command (unknown language '{language}'):\n```\n{code}\n```"
+                _LOG.warning(skip_output)
+                # Append a non-zero exit code and the formatted skip message as output
+                exit_codes.append(1) # Indicate failure/skip
+                outputs.append(skip_output) # Add formatted skip message to outputs
+                log_messages.append(skip_output) # Also log it
+                continue # Skip to the next block
+
+            # Execute known language block using the parent method for a single block
+            # This assumes the parent method can handle a list with one item.
+            try:
+                # We call the super method with a list containing only the current block
+                single_block_result: CommandLineCodeResult = super().execute_code_blocks([block])
+                _LOG.debug(f"Execution result (Exit Code {single_block_result.exit_code}):\n---\n{single_block_result.output}\n---")
+                exit_codes.append(single_block_result.exit_code)
+                # Prepend the executed code to the output for the agent
+                formatted_output = f"Executed command:\n```\n{code}\n```\nOutput:\n{single_block_result.output}"
+                outputs.append(formatted_output)
+                # Assuming log file path might be in the result, or construct one if needed
+                # For simplicity, we'll just use the output as the log message here.
+                # Update log message to use 'language'
+                log_messages.append(f"Executed {language} block. Exit Code: {single_block_result.exit_code}\nOutput:\n{single_block_result.output}") # Keep log simple
+            except Exception as e:
+                # Update error message to use 'language' and include code for agent output
+                error_output = f"Error executing command:\n```\n{code}\n```\nError:\n{e}"
+                _LOG.error(f"Error executing {language} block: {e}\nCode:\n---\n{code}\n---", exc_info=True) # Keep detailed log
+                exit_codes.append(1) # Indicate failure
+                outputs.append(error_output) # Add formatted error to outputs
+                log_messages.append(error_output) # Also log it
+
+
+        # Combine results. We need to decide how to aggregate exit codes.
+        # Let's return 0 only if all blocks succeeded (exit code 0).
+        final_exit_code = 0
+        if any(ec != 0 for ec in exit_codes):
+            final_exit_code = 1 # Or perhaps the first non-zero exit code? Let's use 1 for simplicity.
+
+        # Combine outputs and log messages
+        final_output = "\n---\n".join(outputs)
+        # The original CommandLineCodeResult might have a specific log file.
+        # We are creating a synthetic result here. Adjust if the actual class structure differs.
+        # Let's assume log_file_path isn't strictly needed or can be None.
+        return CommandLineCodeResult(exit_code=final_exit_code, output=final_output) # Removed log_file_path
+
+
+# Set timeout to a very large value (e.g., 24 hours) instead of None to avoid TypeError
+# This effectively disables the timeout for practical purposes.
+_24_HOURS_IN_SECONDS = 24 * 60 * 60
+executor = EnhancedLocalExecutor(work_dir=str(HOME_DIR), timeout=_24_HOURS_IN_SECONDS)
+
+
+# ---------------------------------------------------------------------------
+# 6) LLM config
+# ---------------------------------------------------------------------------
 llm_config = {
     "temperature": 0.7,
     "cache_seed": None,
-    "config_list": [
-        {
-            "model": "gemini-2.5-flash-preview-04-17" if USE_GEMINI else "gpt-3.5-turbo",
-            "api_key": GEMINI_API_KEYS[0] if USE_GEMINI else OPENAI_API_KEY,
-            "api_type": "google" if USE_GEMINI else "openai",
-        }
-    ],
+    "config_list": [{
+        "model": "gemini-2.5-flash-preview-04-17" if USE_GEMINI else "gpt-3.5-turbo",
+        "api_key": GEMINI_API_KEYS[0] if USE_GEMINI else OPENAI_API_KEY,
+        "api_type": "google" if USE_GEMINI else "openai",
+    }],
 }
-
 assistant = autogen.AssistantAgent(
-    name="assistant",
+    name=BOT_USER,
     llm_config=llm_config,
-    system_message=textwrap.dedent(
-        """
-        You are an autonomous coding‑assistant running inside a Discord bot.
-        You have full shell access in `agent_workspace/` (read / write / exec).
+    system_message=textwrap.dedent(f"""
+        You are **{BOT_USER}**, an autonomous coding-assistant running in a Discord bot.
+        Working directory: `{HOME_DIR}`, you have full access via sudo.
 
-        • ALWAYS run real commands – never simulate.
-        • If you need a long‑running server, start it with:
-              nohup <command> >server.log 2>&1 & disown
-
-        Wrap code in ``` … ``` with “# filename: …” on the first line.
-        When the entire task is finished output exactly:
-
-            TERMINATE
-        """
-    ).strip(),
+        • ALWAYS run real commands.
+        • For servers, use: nohup <cmd> >server.log 2>&1 & disown
+        • Wrap shell code in ```bash ...```.
+        • Never put sample output in backticks.
+        • Prefix commands with sudo if needed.
+        • Reply exactly **TERMINATE** when done.
+    """).strip(),
 )
-
 user_proxy = autogen.UserProxyAgent(
     name="user_proxy",
     human_input_mode="NEVER",
-    max_consecutive_auto_reply=0,          # ← stop the blank echoes
-    default_auto_reply="TERMINATE",        # ← belt‑and‑braces
-    is_termination_msg=lambda m: (
-        m.get("content", "").strip().upper() in {"TERMINATE", "TASK COMPLETE", "DONE"}
-    ),
+    max_consecutive_auto_reply=500,
+    default_auto_reply="TERMINATE",
+    is_termination_msg=lambda m: m.get("content", "").strip().upper() in {"TERMINATE", "DONE"},
     code_execution_config={"executor": executor},
 )
 
+# ---------------------------------------------------------------------------
+# 7) Discord glue
+# ---------------------------------------------------------------------------
 intents = discord.Intents.default()
 intents.message_content = True
 bot = discord.Client(intents=intents)
 
-_channel_locks: dict[int, asyncio.Lock] = {}
-_current_tasks: dict[int, asyncio.Task] = {}
+_channel_locks: Dict[int, asyncio.Lock] = {}
+_current_tasks: Dict[int, asyncio.Task] = {}
 _spawned_pids: set[int] = set()
 
+async def _send_long(ch: discord.abc.Messageable, txt: str):
+    for chunk in [txt[i:i+1900] for i in range(0, len(txt), 1900)]:
+        await ch.send(chunk)
+
+RUN_AS_ROOT = os.geteuid() == 0
+# Use plain 'sudo' instead of 'sudo -n' to avoid potential non-interactive failures,
+# assuming passwordless sudo is configured or the script runs as root.
+SUDO: list[str] = [] if RUN_AS_ROOT else ["sudo"]
+
+def _run(cmd: list[str] | str, **kw):
+    if isinstance(cmd, str):
+        cmd = shlex.split(cmd)
+    return subprocess.check_output(SUDO + cmd, **kw)
+
+# ---------------------------------------------------------------------------
+# 8) background server patterns & spawn helper
+# ---------------------------------------------------------------------------
 _SERVER_PATTERNS = [
-    re.compile(r"python3?\s+-m\s+http\.server\s+\d+", re.I),
-    re.compile(r"flask\s+run\b", re.I),
-    re.compile(r"node\s+\S+\.js\b", re.I),
-    re.compile(r"(npm|pnpm|yarn)\s+(run\s+)?start\b", re.I),
+    re.compile(r"python3? -m http\.server \d+", re.I),
+    re.compile(r"flask run\b", re.I),
+    re.compile(r"node \S+\.js\b", re.I),
+    re.compile(r"(npm|pnpm|yarn) (run )?start\b", re.I),
 ]
 
 def _spawn_daemon(cmd: str) -> int:
     proc = subprocess.Popen(
-        shlex.split(cmd.split("&")[0].strip()),
-        cwd=WORK_DIR,
+        SUDO + shlex.split(cmd.split("&")[0].strip()),
+        cwd="/",
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
     _spawned_pids.add(proc.pid)
-    _LOG.info("🌐 spawned daemon: %s  (pid %d)", cmd, proc.pid)
+    _LOG.info("🌐 spawned daemon: %s  (pid %d)", cmd, proc.pid)
     return proc.pid
 
-def _strip_server_lines(script: str) -> tuple[str, list[str]]:
-    kept, spawned = [], []
-    for line in script.splitlines():
-        if any(p.search(line) for p in _SERVER_PATTERNS):
-            spawned.append(line)
-        else:
-            kept.append(line)
-    return "\n".join(kept) + "\n", spawned
+# ---------------------------------------------------------------------------
+# 9) slash-commands
+# ---------------------------------------------------------------------------
+def _handle_host_cmd(cmd: str, args: List[str]) -> tuple[str, str]:
+    if cmd == "status":
+        out = _run("/usr/local/bin/status_agent.sh").decode(); return ("Agent status", out or "(no output)")
+    if cmd == "restart":
+        out = _run("/usr/local/bin/restart_agent.sh").decode(); return ("Agent restarted", out or "(no output)")
+    if cmd == "stop":
+        out = _run("/usr/local/bin/stop_agent.sh").decode(); return ("Agent stopped", out or "(no output)")
+    if cmd == "logs":
+        n = int(args[0]) if args else 50
+        out = _run(["tail", "-n", str(n), f"{AGENT_HOME}/agent.log"]).decode()
+        return (f"Last {n} log lines", out or "(empty)")
+    if cmd == "interrupt": return ("", "")
+    raise ValueError(cmd)
 
-def _run_all() -> list[str]:
-    results: list[str] = []
-
-    for path in WORK_DIR.glob("*.sh"):
-        cleaned, to_spawn = _strip_server_lines(path.read_text())
-        if to_spawn:
-            path.write_text(cleaned)
-            for cmd in to_spawn:
-                pid = _spawn_daemon(cmd)
-                results.append(f"🌐 Started background server “{cmd.strip()}” (pid {pid})")
-
-    for path in WORK_DIR.iterdir():
-        fname = path.name
-        try:
-            if fname.endswith(".sh"):
-                out = subprocess.check_output(["bash", str(path)],
-                                              cwd=WORK_DIR, stderr=subprocess.STDOUT, timeout=30)
-                results.append(f"✅ {fname} exited 0\n{out.decode() or '(no output)'}")
-            elif fname.endswith(".py") and fname != "server.py":
-                out = subprocess.check_output([sys.executable, str(path)],
-                                              cwd=WORK_DIR, stderr=subprocess.STDOUT, timeout=30)
-                results.append(f"✅ {fname} exited 0\n{out.decode() or '(no output)'}")
-            elif fname == "server.py":
-                pid = _spawn_daemon(f"python3 {fname}")
-                results.append(f"🌐 Started server.py (pid {pid})")
-        except subprocess.TimeoutExpired:
-            results.append(f"⏱️  {fname} timed‑out after 30 s")
-        except subprocess.CalledProcessError as exc:
-            results.append(f"❌ {fname} exited {exc.returncode}\n{exc.output.decode()}")
-    return results
-
-def _last_assistant_content(history: list[dict]) -> str:
-    for msg in reversed(history):
-        if msg.get("name") == "assistant" and msg.get("content", "").strip():
-            return msg["content"]
-    return ""
-
-async def _send_long_msg(channel: discord.abc.Messageable, text: str) -> None:
-    for chunk in [text[i:i+1900] for i in range(0, len(text), 1900)]:
-        await channel.send(chunk)
-
-async def _handle_request(channel: discord.abc.Messageable, content: str) -> None:
-    lock = _channel_locks.setdefault(channel.id, asyncio.Lock())
+# ---------------------------------------------------------------------------
+# 10) main request handler
+# ---------------------------------------------------------------------------
+async def _handle_request(ch: discord.abc.Messageable, content: str):
+    lock = _channel_locks.setdefault(ch.id, asyncio.Lock())
     async with lock:
         try:
-            await channel.typing()
+            await ch.typing()
+            header = textwrap.dedent(f"""
+                You are **{BOT_USER}**, an autonomous coding-assistant running in a Discord bot.
+                Working directory: `{HOME_DIR}`, you have full access via sudo.
 
-            header = textwrap.dedent(
-                """
-                Your name is **Homonculus**.
-                You have full shell access in this sandbox VM (`agent_workspace/`).
-
-                • read / write / exec any file
-                • run any CLI command (non‑interactive)
-                • If you need a long‑running server use
-                    `nohup … >server.log 2>&1 & disown`
-
-                NEVER simulate commands – **always** run them for real.
-                Wrap code in triple‑back‑ticks, first line `# filename: …`
-                When the task is complete output **TERMINATE**.
-                """
-            ).strip()
-
-            first_msg = f"{header}\n\n{content}"
-
+                • ALWAYS run real commands.
+                • For servers, use: nohup <cmd> >server.log 2>&1 & disown
+                • Wrap shell code in ```bash ...```.
+                • Never put sample output in backticks.
+                • Prefix commands with sudo if needed.
+                • Reply exactly **TERMINATE** when done.
+            """).strip()
             loop = asyncio.get_running_loop()
             chat_result = await loop.run_in_executor(
                 None,
                 lambda: user_proxy.initiate_chat(
-                    assistant, message=first_msg, clear_history=True
+                    assistant,
+                    message=f"{header}\n\n{content}",
+                    clear_history=False,
                 )
             )
-
-            pattern = re.compile(r"```(?:\w+)?\s*\n# filename: ([^\n]+)\n(.*?)```", re.DOTALL)
-            files_written = False
-            assistant_msgs = [m["content"] for m in chat_result.chat_history if m["name"] == "assistant"]
-            for m in pattern.finditer("\n".join(assistant_msgs)):
-                fname, code = m.group(1).strip(), m.group(2)
-                path = WORK_DIR / fname
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(code)
-                files_written = True
-
-            if files_written:
-                exec_out = await loop.run_in_executor(None, _run_all)
-                if exec_out:
-                    user_proxy.send("Execution results:\n" + "\n\n".join(exec_out),
-                                    recipient=assistant)
-            # grab the last *non‑empty* assistant message so we never forward
-            # the blank echo that UserProxy may add at the tail of history
-            reply = _last_assistant_content(chat_result.chat_history)
-
-            if not reply.strip():
-                reply = "⚠️  No reply generated (empty turn filtered)."
-
-            await _send_long_msg(channel, reply)
-
+            # process execution results automatically included by executor
+            # send only last assistant content without codeblocks
+            last = None
+            for msg in reversed(chat_result.chat_history):
+                if msg.get("name") == BOT_USER and msg.get("content","").strip():
+                    last = msg["content"].strip(); break
+            if not last:
+                await ch.send("⚠️ No reply generated.")
+                return
+            cleaned = re.sub(r"```.*?```", "", last, flags=re.DOTALL).strip()
+            await ch.send(cleaned)
         except asyncio.CancelledError:
-            await channel.send("🚫  Task cancelled.")
-            raise
+            await ch.send("🚫 Task cancelled."); raise
         except Exception as exc:
-            _LOG.error("Error in handler: %s", exc, exc_info=True)
-            await channel.send(f"⚠️  Internal error: {exc}")
+            _LOG.error("Handler error: %s", exc, exc_info=True)
+            await ch.send(f"⚠️ Internal error: {exc}")
 
+# ---------------------------------------------------------------------------
+# 11) Discord event handlers
+# ---------------------------------------------------------------------------
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user} (discord {discord.__version__})  "
-          f"AutoGen {autogen.__version__}")
+    print(f"✅ Logged in as {bot.user} (discord {discord.__version__}) – HOME={HOME_DIR}")
 
 @bot.event
-async def on_message(message: discord.Message):
-    if message.author == bot.user:
+async def on_message(msg: discord.Message):
+    if msg.author == bot.user: return
+    # slash commands
+    if msg.content.startswith("/"):
+        parts = msg.content[1:].split(); cmd, args = parts[0].lower(), parts[1:]
+        if cmd == "interrupt":
+            t = _current_tasks.get(msg.channel.id)
+            if t and not t.done(): t.cancel(); await msg.channel.send("🚫 Current task cancelled.")
+            else: await msg.channel.send("⚠️ No running task.")
+            return
+        try:
+            title, out = _handle_host_cmd(cmd, args)
+            await _send_long(msg.channel, f"**{title}**\n```\n{out}\n```")
+        except Exception as e:
+            await msg.channel.send(f"⚠️ {e}")
         return
-
-    if message.content.strip().lower() in {"!cancel", "!abort"}:
-        task = _current_tasks.get(message.channel.id)
-        if task and not task.done():
-            task.cancel()
-            await message.channel.send("🚫  Current task cancelled.")
-        else:
-            await message.channel.send("⚠️  No running task to cancel.")
-        return
-
-    lock = _channel_locks.setdefault(message.channel.id, asyncio.Lock())
+    # normal interaction
+    lock = _channel_locks.setdefault(msg.channel.id, asyncio.Lock())
     if lock.locked():
-        await message.channel.send("⏳ Busy – please wait or type **!cancel**.")
+        await msg.channel.send("⏳ Busy – type /interrupt.")
         return
+    task = asyncio.create_task(_handle_request(msg.channel, msg.content))
+    _current_tasks[msg.channel.id] = task
+    task.add_done_callback(lambda t: _current_tasks.pop(msg.channel.id, None))
 
-    task = asyncio.create_task(_handle_request(message.channel, message.content))
-    _current_tasks[message.channel.id] = task
-    task.add_done_callback(lambda _: _current_tasks.pop(message.channel.id, None))
-
+# ---------------------------------------------------------------------------
+# 12) run the bot
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     bot.run(DISCORD_BOT_TOKEN)
