@@ -19,10 +19,60 @@ from __future__ import annotations
 import os, sys, time, random, re, logging, itertools
 from importlib import import_module
 from typing import Any, Dict, List
+import tiktoken # Added for token counting
 
 # ── basic logging ────────────────────────────────────────────────────────────
 _LOG = logging.getLogger("GeminiRetryWrapper")
 _LOG.setLevel(logging.INFO)          # change to DEBUG for very chatty output
+
+
+# --- Custom Exception ---
+class EmptyApiResponseError(Exception):
+    """Raised when the Gemini API returns a response without expected content (e.g., no candidates)."""
+    pass
+# --- End Custom Exception ---
+
+
+# --- Tokenizer Initialization ---
+# Define constants
+MAX_TOTAL_TOKENS = 950_000 # Conservative limit for ~1M window
+# Initialize tokenizer (outside class, once)
+try:
+    # Using cl100k_base as a general-purpose tokenizer suitable for recent models
+    tokenizer = tiktoken.get_encoding("cl100k_base")
+    _LOG.info("✅ tiktoken tokenizer (cl100k_base) initialized for context pruning.")
+except Exception:
+    _LOG.warning("⚠️ tiktoken cl100k_base not found, falling back to gpt-2. Token estimation might be less accurate.")
+    try:
+        tokenizer = tiktoken.get_encoding("gpt2")
+        _LOG.info("✅ tiktoken tokenizer (gpt2 fallback) initialized for context pruning.")
+    except Exception:
+        _LOG.error("❌ Failed to initialize tiktoken tokenizer. Context pruning disabled.")
+        tokenizer = None
+
+def _estimate_tokens(messages: List[Dict[str, Any]]) -> int:
+    """Estimates token count for a list of messages using tiktoken."""
+    if not tokenizer:
+        return 0 # Pruning disabled if tokenizer failed
+
+    num_tokens = 0
+    for message in messages:
+        # Approximation based on OpenAI cookbooks: Add tokens for role/name and content
+        # ~4 tokens per message for overhead (role, separators, etc.)
+        num_tokens += 4
+        for key, value in message.items():
+            if isinstance(value, str):
+                try:
+                    encoded = tokenizer.encode(value)
+                    num_tokens += len(encoded)
+                except Exception as e:
+                    # Log encoding errors but continue estimation
+                    _LOG.debug(f"tiktoken encoding failed for value fragment: '{value[:50]}...' Error: {e}")
+            # Add handling here if messages contain non-string parts that need token counting
+    num_tokens += 2 # Add a few tokens for the final assistant prompt start approximation
+    return num_tokens
+# --- End Tokenizer Setup ---
+
 
 # ── grab the original Gemini class regardless of Autogen version ─────────────
 gemini_mod = import_module("autogen.oai.gemini")
@@ -78,6 +128,7 @@ class GeminiRetryWrapper(BaseGemini):                    # noqa: N801
             GeminiRetryWrapper._key_cycle = itertools.cycle(GeminiRetryWrapper._KEYS)
 
         self._switch_key(next(GeminiRetryWrapper._key_cycle))
+        self._tokenizer = tokenizer # Store tokenizer instance if needed later
 
     # ── helpers ──────────────────────────────────────────────────────────────
     def _switch_key(self, key: str) -> None:
@@ -96,25 +147,101 @@ class GeminiRetryWrapper(BaseGemini):                    # noqa: N801
         backoff = self.BASE_BACKOFF
         failures_on_key = 0
 
+        # --- Context Pruning Logic ---
+        if self._tokenizer and "messages" in params:
+            messages = params.get("messages", [])
+            if messages and isinstance(messages, list): # Ensure messages exist and is a list
+                try:
+                    initial_estimated_tokens = _estimate_tokens(messages)
+                    _LOG.debug(f"Estimated tokens before pruning: {initial_estimated_tokens}")
+
+                    # Check if system message exists (usually the first message)
+                    # Roles can be 'system', 'user', 'assistant', 'model' (for Gemini)
+                    is_system_first = messages[0].get("role") in ("system",) # Adjust if other roles act as system prompt
+                    prune_start_index = 1 if is_system_first else 0
+                    pruned_count = 0
+
+                    current_tokens = initial_estimated_tokens
+                    # Prune only if there are messages beyond the system message (if any)
+                    # Keep at least one message after the system prompt if possible
+                    while current_tokens > MAX_TOTAL_TOKENS and len(messages) > prune_start_index + 1:
+                        removed_message = messages.pop(prune_start_index)
+                        pruned_count += 1
+                        # Re-estimate after removal - more accurate than subtracting
+                        current_tokens = _estimate_tokens(messages)
+                        _LOG.debug(f"Pruning: Removed message index {prune_start_index}. New estimated tokens: {current_tokens}")
+
+                    if pruned_count > 0:
+                         _LOG.warning(
+                            f"✂️ Context pruning: Removed {pruned_count} oldest message(s) "
+                            f"to fit within ~{MAX_TOTAL_TOKENS} token limit. "
+                            f"Final estimated tokens: {current_tokens}"
+                         )
+
+                    if current_tokens > MAX_TOTAL_TOKENS and len(messages) <= prune_start_index + 1:
+                         _LOG.error(
+                             f"🚨 Cannot prune further. Remaining messages ({len(messages)}) "
+                             f"still exceed token limit ({current_tokens}/{MAX_TOTAL_TOKENS}). "
+                             f"API call likely to fail."
+                         )
+
+                    # Update params with potentially pruned messages list
+                    params["messages"] = messages
+
+                except Exception as prune_exc:
+                    _LOG.error(f"⚠️ Error during token estimation/pruning: {prune_exc}", exc_info=True)
+                    # Proceed without pruning if estimation fails, log the error
+
+        # --- End Context Pruning ---
+
+
         while True:
             if time.time() - start > self.MAX_TOTAL_SECONDS:
+                _LOG.error(f"⏰ GeminiRetryWrapper: Exceeded MAX_TOTAL_SECONDS ({self.MAX_TOTAL_SECONDS}s). Giving up.")
                 raise RuntimeError(
                     f"GeminiRetryWrapper: gave up after "
                     f"{(time.time() - start) / 3600:.1f} h of continuous failures"
                 )
 
             try:
-                return super().create(params)
+                # --- Add logging before the call for potential debugging ---
+                # _LOG.debug(f"Calling Gemini API with params: {params}") # Keep commented unless debugging
+                response = super().create(params)
+                # --- Add logging after the call ---
+                # _LOG.debug(f"Received Gemini API response: {response}") # Keep commented unless debugging
+                return response
 
-            except Exception as exc:  # broad – we filter below
+            except IndexError as idx_exc:
+                # Specifically catch IndexError: list index out of range
+                msg = str(idx_exc)
+                if "list index out of range" in msg:
+                    _LOG.error(
+                        f"🚨 Gemini API returned empty/unexpected response (IndexError): {msg}. "
+                        f"This request will not be retried.",
+                        exc_info=True # Include traceback in log
+                    )
+                    # Raise custom error instead of retrying
+                    raise EmptyApiResponseError(
+                        "Gemini API returned no valid candidates or content for this request."
+                    ) from idx_exc
+                else:
+                    # If it's a different IndexError, treat as unexpected and raise
+                    _LOG.error(f"❌ Unexpected IndexError encountered: {idx_exc}", exc_info=True)
+                    raise idx_exc
+
+            except Exception as exc:  # Catch other exceptions for retries
                 msg = str(exc)
-                retriable = (
+                # Check only for standard retriable HTTP codes now
+                is_http_retriable = (
                     "429" in msg or "quota" in msg or
                     any(code in msg for code in ("500", "502", "503", "504"))
                 )
-                if not retriable:
-                    raise      # bubble‐up non‑quota errors immediately
 
+                if not is_http_retriable:
+                    _LOG.error(f"❌ Non-retriable error encountered: {exc}", exc_info=True)
+                    raise exc # Re-raise non-retriable errors immediately
+
+                # --- Retry logic for HTTP 429/5xx errors ---
                 attempt += 1
                 failures_on_key += 1
 

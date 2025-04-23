@@ -1,6 +1,6 @@
 # filename: autogen_discord_bot.py
 from __future__ import annotations
-import asyncio, builtins, logging, os, re, shlex, subprocess, sys, textwrap, getpass
+import asyncio, builtins, logging, os, re, shlex, subprocess, sys, textwrap, getpass, re
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -20,11 +20,22 @@ from dotenv import load_dotenv; load_dotenv()
 _GIT_USERNAME = os.getenv("GIT_USERNAME")
 _GIT_TOKEN = os.getenv("GIT_TOKEN")
 _GH_TOKEN = os.getenv("GH_TOKEN")
+
 if not all([_GIT_USERNAME, _GIT_TOKEN, _GH_TOKEN]):
     _LOG.warning("⚠️ Git/GitHub environment variables (GIT_USERNAME, GIT_TOKEN, GH_TOKEN) not fully set. Git/GH operations might fail. Ensure they are in the .env file.")
 else:
     _LOG.info("✅ Git/GitHub environment variables loaded.")
 
+# -- Load AWS credentials --
+_AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+_AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+_AWS_REGION = os.getenv("AWS_REGION")
+_AWS_ACCOUNT_ID = os.getenv("AWS_ACCOUNT_ID")
+
+if not all([_AWS_ACCESS_KEY_ID, _AWS_SECRET_ACCESS_KEY, _AWS_REGION, _AWS_ACCOUNT_ID]):
+    _LOG.warning("⚠️ AWS environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, AWS_ACCOUNT_ID) not fully set. AWS operations might fail. Ensure they are in the .env file.")
+else:
+    _LOG.info("✅ AWS environment variables loaded.")
 
 # ---------------------------------------------------------------------------
 # 1) dynamic user/assistant name & workspace
@@ -300,28 +311,87 @@ def _handle_host_cmd(cmd: str, args: List[str]) -> tuple[str, str]:
 async def _handle_request(ch: discord.abc.Messageable, content: str):
     lock = _channel_locks.setdefault(ch.id, asyncio.Lock())
     async with lock:
-        try:
-            await ch.typing()
-            header = textwrap.dedent(f"""
-                You are **{BOT_USER}**, an autonomous coding-assistant running in a Discord bot.
-                Working directory: `{HOME_DIR}`, you have full access via sudo.
+        # --- Retry Logic Variables ---
+        max_retries = 2 # Max attempts for empty response errors
+        retries = 0
+        success = False
+        chat_result = None # Initialize chat_result
 
-                • ALWAYS run real commands.
-                • For servers, use: nohup <cmd> >server.log 2>&1 & disown
-                • Wrap shell code in ```bash ...```.
-                • Never put sample output in backticks.
-                • Prefix commands with sudo if needed.
-                • Reply exactly **TERMINATE** when done.
-            """).strip()
-            loop = asyncio.get_running_loop()
-            chat_result = await loop.run_in_executor(
-                None,
-                lambda: user_proxy.initiate_chat(
-                    assistant,
-                    message=f"{header}\n\n{content}",
-                    clear_history=False,
+        # --- Define header once ---
+        header = textwrap.dedent(f"""
+            You are **{BOT_USER}**, an autonomous coding-assistant running in a Discord bot.
+            Working directory: `{HOME_DIR}`, you have full access via sudo.
+
+            • ALWAYS run real commands.
+            • For servers, use: nohup <cmd> >server.log 2>&1 & disown
+            • Wrap shell code in ```bash ...```.
+            • Never put sample output in backticks.
+            • Prefix commands with sudo if needed.
+            • Reply exactly **TERMINATE** when done.
+        """).strip()
+        loop = asyncio.get_running_loop()
+
+        # --- Main execution and retry loop ---
+        while retries <= max_retries and not success:
+            try:
+                await ch.typing() # Indicate activity each attempt
+
+                # --- Initiate Chat ---
+                # Note: Using clear_history=False to maintain context across retries.
+                # Pruning in the wrapper should handle excessive length.
+                _LOG.info(f"Attempt {retries + 1}/{max_retries + 1}: Calling user_proxy.initiate_chat...")
+                chat_result = await loop.run_in_executor(
+                    None,
+                    lambda: user_proxy.initiate_chat(
+                        assistant,
+                        message=f"{header}\n\n{content}", # Use original content each time
+                        clear_history=False,
+                    )
                 )
-            )
+                _LOG.info(f"Attempt {retries + 1}/{max_retries + 1}: initiate_chat completed.")
+                success = True # Mark as success if no exception occurred
+                break # Exit loop on success
+
+            except IndexError as idx_exc:
+                error_message = str(idx_exc)
+                if "list index out of range" in error_message:
+                    retries += 1
+                    _LOG.warning(
+                        f"Gemini API returned empty/unexpected response (IndexError) on attempt {retries}/{max_retries + 1}. "
+                        f"Retrying after delay..."
+                    )
+                    if retries > max_retries:
+                         _LOG.error(f"Maximum retries ({max_retries}) reached for empty API response. Aborting.")
+                         await ch.send("⚠️ The AI model repeatedly failed to provide a valid response. Agent cannot proceed.")
+                         return # Exit handler
+                    await asyncio.sleep(retries * 2) # Increasing delay (2s, 4s)
+                    # Loop continues for the next attempt
+                else:
+                    # Different IndexError, treat as unexpected and raise to outer handler
+                    _LOG.error(f"Unhandled IndexError encountered: {idx_exc}", exc_info=True)
+                    raise # Re-raise to be caught by generic Exception handler below
+
+            # --- Catch CancelledError within the loop if needed, or handle outside ---
+            # Let's handle CancelledError and other Exceptions outside the retry loop for simplicity
+
+        # --- Process successful result or handle loop exit ---
+        if not success:
+             # This case should ideally be handled by the retry limit message above,
+             # but as a fallback:
+             _LOG.error("Exited retry loop without success. Agent failed.")
+             if retries > max_retries: # Check if it was due to max retries
+                 # Message already sent above
+                 pass
+             else: # Should not happen if logic is correct, but handle anyway
+                 await ch.send("⚠️ Agent failed to complete the request after retries.")
+             return # Exit handler
+
+        # --- Process successful chat_result ---
+        try:
+            if not chat_result: # Should not happen if success is True, but check
+                 await ch.send("⚠️ Internal state error: Successful run but no chat result.")
+                 return
+
             # process execution results automatically included by executor
             # send only last assistant content without codeblocks
             last = None
@@ -332,12 +402,35 @@ async def _handle_request(ch: discord.abc.Messageable, content: str):
                 await ch.send("⚠️ No reply generated.")
                 return
             cleaned = re.sub(r"```.*?```", "", last, flags=re.DOTALL).strip()
-            await ch.send(cleaned)
+            # Use _send_long to handle potential long messages and avoid Discord 2000 char limit
+            if cleaned: # Only send if there's content after cleaning
+                 await _send_long(ch, cleaned)
+            else:
+                 # If cleaning removed everything (e.g., response was only code blocks), send a notification.
+                 await ch.send("ℹ️ Agent response contained only code blocks (which are executed, not displayed here).")
+
+        # --- Outer Exception Handling (for non-retryable errors) ---
         except asyncio.CancelledError:
-            await ch.send("🚫 Task cancelled."); raise
-        except Exception as exc:
-            _LOG.error("Handler error: %s", exc, exc_info=True)
-            await ch.send(f"⚠️ Internal error: {exc}")
+            await ch.send("🚫 Task cancelled.") # Don't re-raise, just notify and exit handler
+            # The task is already cancelled, raising again might cause issues depending on caller.
+            # Let the lock release naturally.
+
+        except Exception as exc: # Catch errors raised from within the loop or other unexpected errors
+            error_message = str(exc)
+            # Regex pattern for the total context token limit error (e.g., ~1M limit)
+            gemini_total_token_error = r"400.*input token count \(\d+\) exceeds the maximum.*allowed \(\d+\)"
+
+            # Check if the error is the Gemini total token limit error
+            if re.search(gemini_total_token_error, error_message, re.IGNORECASE | re.DOTALL):
+                 _LOG.warning(f"Gemini total context token limit error encountered despite pruning: {error_message}")
+                 await ch.send("⚠️ The conversation history became too long for the AI model (total limit), even after attempting to shorten it. "
+                               "The request failed for this turn. Please try starting a fresh conversation (e.g., using `/interrupt` then re-prompting).")
+                 # Let the lock release.
+
+            else:
+                # Handle other, unexpected exceptions (including re-raised IndexErrors)
+                _LOG.error(f"Unhandled Handler error: {exc}", exc_info=True)
+                await ch.send(f"⚠️ An unexpected internal error occurred: {exc}")
 
 # ---------------------------------------------------------------------------
 # 11) Discord event handlers
