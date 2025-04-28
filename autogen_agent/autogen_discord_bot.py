@@ -95,7 +95,33 @@ _LOG.warning("⚠️ Monkey-patched LocalCommandLineCodeExecutor.sanitize_comman
 # ---------------------------------------------------------------------------
 # 5) Enhanced Executor with Logging
 # ---------------------------------------------------------------------------
+# --- add this helper inside your module (keep log object) -------------------
+def _run_large_bash(code: str, work_dir: Path, timeout: int) -> CommandLineCodeResult:
+    """
+    Write long bash code to a temp file and execute it to bypass ARG_MAX.
+    Returns a CommandLineCodeResult compatible with AutoGen.
+    """
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".sh", dir=work_dir) as fh:
+        fh.write(textwrap.dedent(code))
+        tmp_script = Path(fh.name)
+    os.chmod(tmp_script, 0o755)
+
+    proc = subprocess.run(
+        ["bash", str(tmp_script)],
+        cwd=work_dir,
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+    )
+    # cleanup if you like: tmp_script.unlink(missing_ok=True)
+    return CommandLineCodeResult(
+        exit_code=proc.returncode,
+        output=proc.stdout + proc.stderr,
+    )
+# ---------------------------------------------------------------------------
+
 class EnhancedLocalExecutor(LocalCommandLineCodeExecutor):
+    ARG_MAX_SAFETY = 1_500_000        # bytes – stay below kernel limit
     # No longer need the sanitize_command override here, as the base class is patched.
     # Expanded list of common languages
     KNOWN_LANGUAGES = {
@@ -146,8 +172,6 @@ class EnhancedLocalExecutor(LocalCommandLineCodeExecutor):
         exit_codes = []
         outputs = []
         for block in code_blocks:
-            # Correct attribute access from .lang to .language
-            # Correct attribute access from .lang to .language
             language = block.language.lower()
             code = block.code
 
@@ -166,6 +190,9 @@ class EnhancedLocalExecutor(LocalCommandLineCodeExecutor):
             # Execute known language block using the parent method for a single block
             # This assumes the parent method can handle a list with one item.
             try:
+                if language in {"bash", "shell", "sh"} and len(code.encode()) > self.ARG_MAX_SAFETY:
+                    _LOG.info("Large bash snippet detected – executing via temp script to avoid ARG_MAX")
+                    return _run_large_bash(code, self.work_dir, self.timeout)
                 # We call the super method with a list containing only the current block
                 single_block_result: CommandLineCodeResult = super().execute_code_blocks([block])
                 _LOG.debug(f"Execution result (Exit Code {single_block_result.exit_code}):\n---\n{single_block_result.output}\n---")
@@ -208,6 +235,7 @@ executor = EnhancedLocalExecutor(work_dir=str(HOME_DIR), timeout=_24_HOURS_IN_SE
 # --- Determine OS and Shell for System Prompt ---
 OS_NAME = platform.system()
 DEFAULT_SHELL = os.environ.get('SHELL', '/bin/bash' if OS_NAME != "Windows" else "cmd.exe")
+os.environ["BASH_ENV"] = str(AGENT_HOME + "/tools.sh")
 
 base_system_prompt = textwrap.dedent(system_prompt_module.SYSTEM_PROMPT(
     BOT_USER, str(HOME_DIR), DEFAULT_SHELL, OS_NAME
