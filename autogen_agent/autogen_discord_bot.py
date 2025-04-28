@@ -1,8 +1,10 @@
 # filename: autogen_discord_bot.py
 from __future__ import annotations
-import asyncio, builtins, logging, os, re, shlex, subprocess, sys, textwrap, getpass, re
+import asyncio, builtins, logging, os, re, shlex, subprocess, sys, textwrap, getpass, platform
 from pathlib import Path
 from typing import List, Dict, Any
+import prompts.system as system_prompt_module
+import prompts.webfgapp as webfg_app_prompt_module
 
 # ── basic setup ──────────────────────────────────────────────────────────────
 builtins.input = lambda *_: ""  # prevent stdin blocking
@@ -89,7 +91,6 @@ def _disabled_sanitize_command(lang: str, code: str) -> None:
 LocalCommandLineCodeExecutor.sanitize_command = _disabled_sanitize_command
 _LOG.warning("⚠️ Monkey-patched LocalCommandLineCodeExecutor.sanitize_command to disable safety checks.")
 # --- End Monkey-patching ---
-
 
 # ---------------------------------------------------------------------------
 # 5) Enhanced Executor with Logging
@@ -204,6 +205,16 @@ class EnhancedLocalExecutor(LocalCommandLineCodeExecutor):
 _24_HOURS_IN_SECONDS = 24 * 60 * 60
 executor = EnhancedLocalExecutor(work_dir=str(HOME_DIR), timeout=_24_HOURS_IN_SECONDS)
 
+# --- Determine OS and Shell for System Prompt ---
+OS_NAME = platform.system()
+DEFAULT_SHELL = os.environ.get('SHELL', '/bin/bash' if OS_NAME != "Windows" else "cmd.exe")
+
+base_system_prompt = textwrap.dedent(system_prompt_module.SYSTEM_PROMPT(
+    BOT_USER, str(HOME_DIR), DEFAULT_SHELL, OS_NAME
+)).strip()
+_LOG.info("✅ Loaded system prompt with, BOT_USER=" + BOT_USER + " HOME_DIR=" + str(HOME_DIR) + " DEFAULT_SHELL=" + DEFAULT_SHELL + " OS_NAME=" + OS_NAME)
+
+header = textwrap.dedent(webfg_app_prompt_module.WEBFG_APP_PROMPT()).strip()
 
 # ---------------------------------------------------------------------------
 # 6) LLM config
@@ -220,17 +231,7 @@ llm_config = {
 assistant = autogen.AssistantAgent(
     name=BOT_USER,
     llm_config=llm_config,
-    system_message=textwrap.dedent(f"""
-        You are **{BOT_USER}**, an autonomous coding-assistant running in a Discord bot.
-        Working directory: `{HOME_DIR}`, you have full access via sudo.
-
-        • ALWAYS run real commands.
-        • For servers, use: nohup <cmd> >server.log 2>&1 & disown
-        • Wrap shell code in ```bash ...```.
-        • Never put sample output in backticks.
-        • Prefix commands with sudo if needed.
-        • Reply exactly **TERMINATE** when done.
-    """).strip(),
+    system_message=base_system_prompt + "\\n\\n" + header
 )
 user_proxy = autogen.UserProxyAgent(
     name="user_proxy",
@@ -340,19 +341,6 @@ async def _handle_request(ch: discord.abc.Messageable, content: str):
     lock = _channel_locks.setdefault(ch.id, asyncio.Lock())
     async with lock:
         # chat_result = None # No longer needed here, defined within try/except scopes
-
-        # --- Define header once ---
-        header = textwrap.dedent(f"""
-            You are **{BOT_USER}**, an autonomous coding-assistant running in a Discord bot.
-            Working directory: `{HOME_DIR}`, you have full access via sudo.
-
-            • ALWAYS run real commands.
-            • For servers, use: nohup <cmd> >server.log 2>&1 & disown
-            • Wrap shell code in ```bash ...```.
-            • Never put sample output in backticks.
-            • Prefix commands with sudo if needed.
-            • Reply exactly **TERMINATE** when done.
-        """).strip()
         loop = asyncio.get_running_loop()
 
         try:
@@ -366,7 +354,7 @@ async def _handle_request(ch: discord.abc.Messageable, content: str):
                 None,
                 lambda: user_proxy.initiate_chat(
                     assistant,
-                    message=f"{header}\n\n{content}",
+                    message=content,
                     clear_history=False, # Keep history for context, wrapper handles pruning
                 )
             )
