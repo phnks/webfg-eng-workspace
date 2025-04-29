@@ -331,7 +331,7 @@ def _handle_host_cmd(cmd: str, args: List[str]) -> tuple[str, str]:
     if cmd == "logs":
         n = int(args[0]) if args else 50
         out = _run(["tail", "-n", str(n), f"{AGENT_HOME}/agent.log"]).decode()
-        return (f"Last {n} log lines", out or "(empty)")
+        return (f"Last {n} log lines", f"```\n{out}\n```")
     if cmd == "interrupt": return ("", "")
     raise ValueError(cmd)
 
@@ -400,7 +400,11 @@ async def _handle_request(ch: discord.abc.Messageable, content: str):
 
         except RuntimeError as rt_exc:
             error_message = str(rt_exc)
-            # Check if it's the specific Gemini 'list index out of range' error
+
+            # ── NEW: regex for Gemini’s 1 048 576-token hard-limit error ──
+            TOKEN_LIMIT_RE = re.compile(r"input token count \\(\\d+\\) exceeds", re.I)
+
+            # A) Gemini “list index out of range” bug (existing branch)
             if "Google GenAI exception occurred" in error_message and "list index out of range" in error_message:
                 _LOG.error(f"Caught specific Gemini API 'list index out of range' error: {rt_exc}. Attempting recovery.")
                 await ch.send("⚠️ The AI model returned an invalid response. Attempting automatic recovery by restarting interaction...")
@@ -437,8 +441,32 @@ async def _handle_request(ch: discord.abc.Messageable, content: str):
                 # End of recovery attempt, return regardless of success/failure of recovery
                 return
 
+            # B) Gemini global-context hard limit – start fresh and retry once
+            elif TOKEN_LIMIT_RE.search(error_message):
+                _LOG.warning("Conversation too long; invoking extra pruning and retrying.")
+                await ch.send(
+                    "⚠️ The conversation got too large for Gemini. "
+                    "I’m pruning the oldest turns (keeping the system prompt) and will try again."
+                )
+
+                # Tighten the wrapper’s token budget by 20 % for this retry.
+                import gemini_retry_wrapper as _grw
+                _grw.MAX_TOTAL_TOKENS = max(256_000, int(_grw.MAX_TOTAL_TOKENS * 0.8))
+
+                await ch.typing()
+                chat_result = await loop.run_in_executor(
+                    None,
+                    lambda: user_proxy.initiate_chat(
+                        assistant,
+                        message=content,       # same prompt
+                        clear_history=False,   # keep recent context
+                    ),
+                )
+                await _process_and_send_result(ch, chat_result)
+                return
+
+            # C) Anything else – bubble up unchanged
             else:
-                # Handle other RuntimeErrors by re-raising
                 _LOG.error(f"Unhandled RuntimeError in handler: {rt_exc}", exc_info=True)
                 raise rt_exc
 
@@ -478,7 +506,7 @@ async def on_message(msg: discord.Message):
             return
         try:
             title, out = _handle_host_cmd(cmd, args)
-            await _send_long(msg.channel, f"**{title}**\n```\n{out}\n```")
+            await _send_long(msg.channel, f"**{title}**\n{out}")
         except Exception as e:
             await msg.channel.send(f"⚠️ {e}")
         return

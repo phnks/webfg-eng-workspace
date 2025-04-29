@@ -33,10 +33,13 @@ class EmptyApiResponseError(Exception):
 # --- End Custom Exception ---
 
 
-# --- Tokenizer Initialization ---
-# Define constants
-MAX_TOTAL_TOKENS = 950_000 # Conservative limit for ~1M window
-# Initialize tokenizer (outside class, once)
+# ── token limits ───────────────────────────────────────────────────────────
+# Gemini’s absolute cap is 1 048 576 tokens.  We keep a small safety margin
+# so the real request can never trip the hard ceiling even if our estimate
+# is a bit low.
+HARD_TOKEN_LIMIT = 1_048_576
+SAFETY_MARGIN     = 8_192            # ≈ 8 k head-room
+MAX_TOTAL_TOKENS  = HARD_TOKEN_LIMIT - SAFETY_MARGIN   # 1 040 384
 try:
     # Using cl100k_base as a general-purpose tokenizer suitable for recent models
     tokenizer = tiktoken.get_encoding("cl100k_base")
@@ -139,6 +142,13 @@ class GeminiRetryWrapper(BaseGemini):                    # noqa: N801
         elif hasattr(self, "_client"):   # autogen ≤ 0.2.39
             self._client.api_key = key
         _LOG.info("🔑  using Gemini key ****%s", key[-4:])
+    
+    # --- override cost to survive models that omit cost -------------------
+    def cost(self, response: Any):  # type: ignore[override]
+        """Return 0 if the model does not provide cost information."""
+        if response is None:
+            return 0.0
+        return getattr(response, "cost", 0.0)
 
     # ── main override: retry loop ────────────────────────────────────────────
     def create(self, params: Dict[str, Any]):   # type: ignore[override]
@@ -147,55 +157,13 @@ class GeminiRetryWrapper(BaseGemini):                    # noqa: N801
         backoff = self.BASE_BACKOFF
         failures_on_key = 0
 
-        # --- Context Pruning Logic ---
-        if self._tokenizer and "messages" in params:
-            messages = params.get("messages", [])
-            if messages and isinstance(messages, list): # Ensure messages exist and is a list
-                try:
-                    initial_estimated_tokens = _estimate_tokens(messages)
-                    _LOG.debug(f"Estimated tokens before pruning: {initial_estimated_tokens}")
-
-                    # Check if system message exists (usually the first message)
-                    # Roles can be 'system', 'user', 'assistant', 'model' (for Gemini)
-                    is_system_first = messages[0].get("role") in ("system",) # Adjust if other roles act as system prompt
-                    prune_start_index = 1 if is_system_first else 0
-                    pruned_count = 0
-
-                    current_tokens = initial_estimated_tokens
-                    # Prune only if there are messages beyond the system message (if any)
-                    # Keep at least one message after the system prompt if possible
-                    while current_tokens > MAX_TOTAL_TOKENS and len(messages) > prune_start_index + 1:
-                        removed_message = messages.pop(prune_start_index)
-                        pruned_count += 1
-                        # Re-estimate after removal - more accurate than subtracting
-                        current_tokens = _estimate_tokens(messages)
-                        _LOG.debug(f"Pruning: Removed message index {prune_start_index}. New estimated tokens: {current_tokens}")
-
-                    if pruned_count > 0:
-                         _LOG.warning(
-                            f"✂️ Context pruning: Removed {pruned_count} oldest message(s) "
-                            f"to fit within ~{MAX_TOTAL_TOKENS} token limit. "
-                            f"Final estimated tokens: {current_tokens}"
-                         )
-
-                    if current_tokens > MAX_TOTAL_TOKENS and len(messages) <= prune_start_index + 1:
-                         _LOG.error(
-                             f"🚨 Cannot prune further. Remaining messages ({len(messages)}) "
-                             f"still exceed token limit ({current_tokens}/{MAX_TOTAL_TOKENS}). "
-                             f"API call likely to fail."
-                         )
-
-                    # Update params with potentially pruned messages list
-                    params["messages"] = messages
-
-                except Exception as prune_exc:
-                    _LOG.error(f"⚠️ Error during token estimation/pruning: {prune_exc}", exc_info=True)
-                    # Proceed without pruning if estimation fails, log the error
-
-        # --- End Context Pruning ---
-
+        # First one-off prune before we enter the retry loop
+        self._aggressive_prune(params)
 
         while True:
+            # Prune again on *every* retry – our previous estimate might have
+            # been too low.
+            self._aggressive_prune(params)
             if time.time() - start > self.MAX_TOTAL_SECONDS:
                 _LOG.error(f"⏰ GeminiRetryWrapper: Exceeded MAX_TOTAL_SECONDS ({self.MAX_TOTAL_SECONDS}s). Giving up.")
                 raise RuntimeError(
@@ -207,7 +175,11 @@ class GeminiRetryWrapper(BaseGemini):                    # noqa: N801
                 # --- Add logging before the call for potential debugging ---
                 # _LOG.debug(f"Calling Gemini API with params: {params}") # Keep commented unless debugging
                 response = super().create(params)
-                # --- Add logging after the call ---
+                # ── NEW: guard against empty responses ────────────────────
+                if response is None:
+                    raise EmptyApiResponseError(
+                        "Gemini API returned an empty response (None)."
+                    )                # --- Add logging after the call ---
                 # _LOG.debug(f"Received Gemini API response: {response}") # Keep commented unless debugging
                 return response
 
@@ -263,6 +235,38 @@ class GeminiRetryWrapper(BaseGemini):                    # noqa: N801
                 ):
                     self._switch_key(next(GeminiRetryWrapper._key_cycle))
                     failures_on_key = 0
+
+    # --- helper ---------------------------------------------------------------
+    def _aggressive_prune(self, params: Dict[str, Any]) -> None:
+        """Remove oldest user/assistant turns (never the system prompt)
+        until the conversation fits under MAX_TOTAL_TOKENS."""
+        if not (self._tokenizer and "messages" in params):
+            return
+
+        messages = params["messages"]
+        if not (messages and isinstance(messages, list)):
+            return
+
+        is_system_first = messages[0].get("role") == "system"
+        prune_from = 1 if is_system_first else 0
+
+        while _estimate_tokens(messages) > MAX_TOTAL_TOKENS and len(messages) > prune_from + 1:
+            del messages[prune_from]
+        params["messages"] = messages
+
+        # Log when we had to chop something
+        if _estimate_tokens(messages) > MAX_TOTAL_TOKENS:
+            _LOG.error(
+                "🚨 Even after pruning, token estimate %d exceeds %d. "
+                "Request will probably fail.",
+                _estimate_tokens(messages), MAX_TOTAL_TOKENS,
+            )
+
+        else:
+            _LOG.debug(
+                "✂️  After pruning conversation is %d tokens (limit %d).",
+                _estimate_tokens(messages), MAX_TOTAL_TOKENS,
+            )
 
 # ── global hot‑patch: swap EVERY stale reference in already‑loaded modules ──
 def _retarget_stale_refs() -> None:

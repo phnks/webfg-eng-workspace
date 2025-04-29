@@ -14,6 +14,9 @@ def WEBFG_APP_PROMPT ():
     the github action will trigger and automatically deploy all your changes to a new environment tagged with your DEPLOYMENT_ID which is the same as your PR number. For example if your PR number is 69 it will automatically deploy webfg-gm-app-qa69 and webfg-gql-qa69.
     You should ALWAYS still deploy manually using the commands in the package.json. For example: `DEPLOYMENT_ID=69 npm run deploy:qa`. You should ALWAYS do this manual deployment since if your code changes cause it to fail you'll want to know the failure reason. The github action will not tell you if it failed.
     You can use the `check-deploy:qa` comcommand as well to check the root cause of any deployment failure. For example: `DEPLOYMENT_ID=69 npm run check-deploy:qa` would tell you the status of the deployment for DEPLOYMENT_ID 69 which is for PR number 69.
+    For example, if you run `DEPLOYMENT_ID=69 npm run deploy:qa` and are told that it failed, often the error will be from AWS CloudFormation and look something like ROLLBACK_COMPLETE or ROLLBACK_UPDATE_COMPLETE which means it failed and was rolled back by AWS.
+    If you run: `DEPLOYMENT_ID=69 npm run check-deploy:qa` it would tell you the exact reason AWS failed and chose to roll it back, which tells you what you need to fix before trying to deploy again.
+    
     webfg-gm-app is only for the react web frontend, and webfg-gql is only for the graphql backend. 
     If your changes only affect the frontend you only need to deploy webfg-gm-app to test your changes
     If your changes only affect the backend graphql or databases then you only need to deploy webfg-gql to test your changes.
