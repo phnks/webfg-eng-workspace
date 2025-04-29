@@ -424,7 +424,7 @@ async def _handle_request(ch: discord.abc.Messageable, content: str):
                         None,
                         lambda: user_proxy.initiate_chat(
                             assistant,
-                            message=f"{header}\n\n{recovery_prompt}", # Use recovery prompt
+                            message=f"{recovery_prompt}",
                             clear_history=False,
                         )
                     )
