@@ -331,7 +331,7 @@ def _handle_host_cmd(cmd: str, args: List[str]) -> tuple[str, str]:
     if cmd == "logs":
         n = int(args[0]) if args else 50
         out = _run(["tail", "-n", str(n), f"{AGENT_HOME}/agent.log"]).decode()
-        return (f"Last {n} log lines", f"```\n{out}\n```")
+        return (f"Last {n} log lines", f"{out}")
     if cmd == "interrupt": return ("", "")
     raise ValueError(cmd)
 
@@ -506,7 +506,7 @@ async def on_message(msg: discord.Message):
             return
         try:
             title, out = _handle_host_cmd(cmd, args)
-            await _send_long(msg.channel, f"**{title}**\n{out}")
+            await _send_long(msg.channel, f"**{title}**\n```{out}```")
         except Exception as e:
             await msg.channel.send(f"⚠️ {e}")
         return
