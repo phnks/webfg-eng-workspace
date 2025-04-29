@@ -231,6 +231,7 @@ class EnhancedLocalExecutor(LocalCommandLineCodeExecutor):
 # This effectively disables the timeout for practical purposes.
 _24_HOURS_IN_SECONDS = 24 * 60 * 60
 executor = EnhancedLocalExecutor(work_dir=str(HOME_DIR), timeout=_24_HOURS_IN_SECONDS)
+executor.max_output_len = None          # None = no truncation
 
 # --- Determine OS and Shell for System Prompt ---
 OS_NAME = platform.system()
