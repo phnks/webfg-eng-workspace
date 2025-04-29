@@ -17,8 +17,7 @@ nohup bash -c '
   sleep 5
   cd "$AGENT_HOME" || exit 1
 
-  PID_FILE="$AGENT_HOME/agent.pid"
-  LOG_FILE="$AGENT_HOME/agent.log"
+  PID_FILE="$AGENT_HOME/.agent.pid"
   SCRIPT="$AGENT_HOME/autogen_discord_bot.py"
 
   # If no PID file, try killing by matching python process
@@ -30,7 +29,6 @@ nohup bash -c '
       sleep 2
       if ! pgrep -f "python $SCRIPT" >/dev/null; then
         echo "[stop_agent] Agent process stopped."
-        rm -f "$LOG_FILE"
         echo "Deleted old log file"
       else
         echo "[stop_agent] ERROR: Still running after kill."
@@ -46,7 +44,6 @@ nohup bash -c '
   if ! ps -p "$PID" >/dev/null; then
     echo "[stop_agent] Stale PID file ($PID); removing." >&2
     rm -f "$PID_FILE"
-    rm -f "$LOG_FILE"
     echo "Deleted old log file"
     exit 0
   fi
@@ -65,20 +62,16 @@ nohup bash -c '
       exit 1
     else
       echo "[stop_agent] Agent force‑killed."
-      rm -f "$LOG_FILE"
       echo "Deleted old log file"
     fi
   else
     echo "[stop_agent] Agent stopped gracefully."
-    rm -f "$LOG_FILE"
     echo "Deleted old log file"
   fi
 
   # Clean up
   rm -f "$PID_FILE"
   echo "[stop_agent] PID file removed."
-  rm -f "$LOG_FILE"
-  echo "Deleted old log file"
 ' >/dev/null 2>&1 &
 
 exit 0

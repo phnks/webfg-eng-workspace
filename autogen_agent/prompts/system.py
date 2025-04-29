@@ -28,11 +28,18 @@ def SYSTEM_PROMPT(BOT_USER, HOME_DIR, DEFAULT_SHELL, OS_NAME):
   If there is an existng bash function that does what you need you must always use the bash function instead of writing a custom command.
   Only use a custom command if the bash function does not do what you need. 
   The bash functions are specially optimized and will always perform the task they are designed for better and faster than any custom command.
+  For all tools debug logs for every step go to **stderr** (prefixed with `[HH:MM:SS]`) so stdout stays clean for data.
+  All tools will exit with **0** on success, **non-zero** on any failure, so you can branch on `$?`
+  
+  **Safety note:**  
+  `list_files` and `search_files` automatically **skip large / irrelevant folders** such as:
 
-  For All commands:
+  `.git, node_modules, dist, build, __pycache__, .cache, .config, .vscode, .idea, venv, .venv, env, .env, target`, and more.  
+  Hidden files are also skipped. This keeps results small and avoids token-limit blow-ups.
 
-  * Debug logs for every step go to **stderr** (prefixed with `[HH:MM:SS]`) so stdout stays clean for data.
-  * Exit **0** on success, **non-zero** on any failure, so you can branch on `$?`
+  If you *really* need to look in one of those places, you must either:
+  1. Call a direct shell command (`find`, `grep`) yourself without relying on these tools, **or**
+  2. Temporarily copy the file elsewhere and then use the tool.
 
   You have access to the following bash function tools:
 

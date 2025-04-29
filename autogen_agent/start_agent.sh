@@ -12,8 +12,8 @@ cd "$AGENT_HOME" || {
 
 echo $AGENT_HOME
 
-PID_FILE="$AGENT_HOME/agent.pid"
-LOG_FILE="$AGENT_HOME/agent.log"
+PID_FILE="$AGENT_HOME/.agent.pid"
+LOG_FILE="$AGENT_HOME/.agent.log"
 VENV_PATH="$AGENT_HOME/venv/bin/activate"
 SCRIPT_NAME="$AGENT_HOME/autogen_discord_bot.py"
 
