@@ -51,7 +51,7 @@ def SYSTEM_PROMPT(BOT_USER, HOME_DIR, DEFAULT_SHELL, OS_NAME):
 
   Example:
   ```bash
-  read_file src/index.ts
+  read_file "src/index.ts"
   ```
 
   # `write_to_file`
@@ -59,14 +59,16 @@ def SYSTEM_PROMPT(BOT_USER, HOME_DIR, DEFAULT_SHELL, OS_NAME):
   Signature:
     write_to_file <file_path> <content…> – quick one-liner
     OR write_to_file <file_path> followed by content on STDIN – best for big / multi-line text.
+  Behaviour:
+    When using this command with long or complex code it is safer to wrap your code in double quotes (") otherwise you may get errors. If there are double quotes inside your code make sure to escape them when using this method
   
   Example (inline):
   ```bash
-  write_to_file docs/README.md "# Project Title\n\nInitial description."
+  write_to_file "docs/README.md" "# Project Title\n\nInitial description."
   ```
   Example (multi-line via heredoc):
   ```bash
-  write_to_file src/config.ts <<'EOF'
+  write_to_file "src/config.ts" <<'EOF'
   export const PORT = process.env.PORT ?? 3000;
   export const HOST = process.env.HOST ?? "0.0.0.0";
   EOF
@@ -78,10 +80,11 @@ def SYSTEM_PROMPT(BOT_USER, HOME_DIR, DEFAULT_SHELL, OS_NAME):
   Behaviour:
     Aborts with “no match” if search_block isn’t found.
     Works with any characters, new-lines, quotes, $, &, etc.
+    When using this command with long or complex code it is safer to wrap your code in double quotes (") otherwise you may get errors or no matches. If there are double quotes inside your code make sure to escape them when using this method
   
   Example:
   ```bash
-  replace_in_file src/config.ts \
+  replace_in_file "src/config.ts" \
   "export const PORT = 3000;" \
   "export const PORT = process.env.PORT ?? 3000;"
   ```
@@ -92,7 +95,7 @@ def SYSTEM_PROMPT(BOT_USER, HOME_DIR, DEFAULT_SHELL, OS_NAME):
   
   Example:
   ```bash
-  list_files src/components
+  list_files "src/components"
   ```
 
   # `search_files`
