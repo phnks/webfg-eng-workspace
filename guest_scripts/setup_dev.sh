@@ -92,26 +92,37 @@ fi
 # Verify (optional, run as user after sourcing .bashrc or new login)
 # sudo -i -u "$USERNAME" bash -c 'source ~/.bashrc && sam --version'
 
-
 # --- Install Google Chrome ---
-echo ">>> Installing Google Chrome..."
-# Add Google Chrome key (use --batch --yes for non-interactive gpg)
-wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor --batch --yes -o /usr/share/keyrings/google-chrome-keyring.gpg
-# Add Google Chrome repository
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
-# Update package list and install Chrome
-apt-get update -y
-apt-get install -y google-chrome-stable
+echo ">>> Checking/Installing Google Chrome..."
+if command -v google-chrome-stable &> /dev/null; then
+    echo "Google Chrome is already installed."
+else
+    echo "Installing Google Chrome..."
+    # Add Google Chrome key (use --batch --yes for non-interactive gpg)
+    wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor --batch --yes -o /usr/share/keyrings/google-chrome-keyring.gpg
+    # Add Google Chrome repository
+    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
+    # Update package list and install Chrome
+    apt-get update -y
+    apt-get install -y google-chrome-stable
+    echo "Google Chrome installed."
+fi
 
 # --- Install Visual Studio Code ---
-echo ">>> Installing Visual Studio Code..."
-# Add Microsoft GPG key (use --batch --yes for non-interactive gpg)
-wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor --batch --yes > /usr/share/keyrings/packages.microsoft.gpg
-# Add VS Code repository
-echo "deb [arch=amd64,arm64,armhf signed-by=/usr/share/keyrings/packages.microsoft.gpg] https://packages.microsoft.com/repos/code stable main" > /etc/apt/sources.list.d/vscode.list
-# Update package list and install VS Code
-apt-get update -y
-apt-get install -y code
+echo ">>> Checking/Installing Visual Studio Code..."
+if command -v code &> /dev/null; then
+    echo "Visual Studio Code is already installed."
+else
+    echo "Installing Visual Studio Code..."
+    # Add Microsoft GPG key (use --batch --yes for non-interactive gpg)
+    wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor --batch --yes > /usr/share/keyrings/packages.microsoft.gpg
+    # Add VS Code repository
+    echo "deb [arch=amd64,arm64,armhf signed-by=/usr/share/keyrings/packages.microsoft.gpg] https://packages.microsoft.com/repos/code stable main" > /etc/apt/sources.list.d/vscode.list
+    # Update package list and install VS Code
+    apt-get update -y
+    apt-get install -y code
+    echo "Visual Studio Code installed."
+fi
 
 echo ">>> Creating user: $USERNAME ..."
 if id "$USERNAME" &>/dev/null; then
@@ -140,11 +151,6 @@ else
     # --- User-specific setup ---
     echo ">>> Performing user-specific setup for $USERNAME..."
 
-    # Install VS Code extension (Cline) as the user
-    # Need to run this as the user, ensuring HOME is set correctly
-    echo "Installing VS Code Cline extension for $USERNAME..."
-    sudo -i -u "$USERNAME" bash -c 'code --install-extension SaoudRizwan.cline --force' || echo "VS Code extension install failed (maybe first run before code path is set?)"
-
     # Set default browser (best effort during provisioning)
     echo "Attempting to set Google Chrome as default browser for $USERNAME..."
     # Ensure the .desktop file exists first
@@ -168,79 +174,218 @@ fi
 # --- Set Environment Variables for User (Run Every Time) ---
 # Ensure this runs even if the user already existed
 if [ -f "/home/$USERNAME/.bashrc" ]; then
-    # Untested code by chatgpt, may not yet work just needs some tweaks like paths
-    # put your helper scripts anywhere, e.g. /usr/local/bin
-    sudo cp status_agent.sh restart_agent.sh stop_agent.sh start_agent.sh /usr/local/bin
-    sudo chmod +x /usr/local/bin/agent_*.sh
-    echo 'anum ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/agent
-    echo 'homonculus ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/agent
-    sudo chmod 0440 /etc/sudoers.d/agent
+    # --- Agent Helper Scripts Setup ---
+    echo ">>> Setting up agent helper scripts..."
+    AGENT_SCRIPTS_SOURCE_DIR="/vagrant/autogen_agent" # Scripts are in autogen_agent dir
+    AGENT_SCRIPTS_DEST_DIR="/usr/local/bin"
+    # Check if source directory exists before copying
+    if [ -d "$AGENT_SCRIPTS_SOURCE_DIR" ]; then
+        echo "Copying agent helper scripts from $AGENT_SCRIPTS_SOURCE_DIR to $AGENT_SCRIPTS_DEST_DIR..."
+        # Copy only the specific shell scripts
+        cp "$AGENT_SCRIPTS_SOURCE_DIR/status_agent.sh" \
+           "$AGENT_SCRIPTS_SOURCE_DIR/restart_agent.sh" \
+           "$AGENT_SCRIPTS_SOURCE_DIR/stop_agent.sh" \
+           "$AGENT_SCRIPTS_SOURCE_DIR/start_agent.sh" \
+           "$AGENT_SCRIPTS_DEST_DIR/" || echo "Warning: Failed to copy agent scripts."
 
-    grep -q '^AGENT_HOME='/etc/environment \
-        || echo "AGENT_HOME=/home/anum/webfg-eng-workspace/autogen_agent" | sudo tee -a /etc/environment  #change to wherever we want the agent scripts to be ideally the agent doesn't have access to its own code
-    if ! grep -q 'export AGENT_HOME=/home/anum/webfg-eng-workspace/autogen_agent' "/home/$USERNAME/.bashrc"; then
-        echo "Setting AGENT_HOME environment variable in /home/$USERNAME/.bashrc ..."
-        echo '' >> "/home/$USERNAME/.bashrc" # Add a newline for separation
-        echo '# Set autogen agent home directory' >> "/home/$USERNAME/.bashrc"
-        echo 'export AGENT_HOME=/home/anum/webfg-eng-workspace/autogen_agent' >> "/home/$USERNAME/.bashrc"
-        # Ownership should be correct if user exists or was just created
+        echo "Setting execute permissions for agent scripts..."
+        chmod +x "$AGENT_SCRIPTS_DEST_DIR/status_agent.sh" \
+                 "$AGENT_SCRIPTS_DEST_DIR/restart_agent.sh" \
+                 "$AGENT_SCRIPTS_DEST_DIR/stop_agent.sh" \
+                 "$AGENT_SCRIPTS_DEST_DIR/start_agent.sh" || echo "Warning: Failed to chmod agent scripts."
+
+        # Grant NOPASSWD sudo rights to the user for these specific scripts (Safer than ALL)
+        SUDOERS_FILE="/etc/sudoers.d/${USERNAME}-agent"
+        echo "Configuring NOPASSWD sudo for agent scripts for user $USERNAME in $SUDOERS_FILE..."
+        # Create the sudoers file content, overwriting if it exists
+        {
+            echo "$USERNAME ALL=(ALL) NOPASSWD:ALL"
+        } > "$SUDOERS_FILE" # Use > to overwrite/create the file
+
+        # Set correct permissions for the sudoers file
+        chmod 0440 "$SUDOERS_FILE" || echo "Warning: Failed to chmod sudoers file $SUDOERS_FILE."
+        echo "Sudoers configuration complete."
     else
-         echo "AGENT_HOME already set in /home/$USERNAME/.bashrc."
+        echo "Warning: Agent scripts source directory $AGENT_SCRIPTS_SOURCE_DIR not found. Skipping helper script setup."
     fi
 
-    # Untested code by chatgpt
-    # 1. Export your GitHub username and PAT into env vars
-    GIT_USERNAME=phnks
-    GIT_TOKEN=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
-    grep -q '^GIT_USERNAME='/etc/environment \
-        || echo "GIT_USERNAME=$GIT_USERNAME" | sudo tee -a /etc/environment
-    if ! grep -q "export GIT_USERNAME=$GIT_USERNAME" "/home/$USERNAME/.bashrc"; then
-        echo "Setting GIT_USERNAME environment variable in /home/$USERNAME/.bashrc ..."
-        echo '' >> "/home/$USERNAME/.bashrc" # Add a newline for separation
-        echo '# Set git username' >> "/home/$USERNAME/.bashrc"
-        echo "export GIT_USERNAME=$GIT_USERNAME" >> "/home/$USERNAME/.bashrc"
-        # Ownership should be correct if user exists or was just created
+    # --- Autogen Agent Setup ---
+    echo ">>> Setting up Autogen Agent for user $USERNAME..."
+    AUTOGEN_SOURCE_DIR="/vagrant/autogen_agent"
+    AUTOGEN_DEST_DIR="/home/$USERNAME/autogen_agent"
+    if [ -d "$AUTOGEN_SOURCE_DIR" ]; then
+        echo "Copying autogen_agent directory from $AUTOGEN_SOURCE_DIR to $AUTOGEN_DEST_DIR..."
+        # Copy the directory recursively
+        cp -r "$AUTOGEN_SOURCE_DIR" "$AUTOGEN_DEST_DIR" || echo "Warning: Failed to copy autogen_agent directory."
+
+        echo "Setting ownership of $AUTOGEN_DEST_DIR for user $USERNAME..."
+        chown -R "$USERNAME:$USERNAME" "$AUTOGEN_DEST_DIR" || echo "Warning: Failed to chown $AUTOGEN_DEST_DIR."
+
+        # --- Generate VM-specific .env file ---
+        echo "Generating VM-specific .env file for $USERNAME..."
+        HOST_ENV_FILE="/vagrant/host_service/.env"
+        VM_ENV_FILE="$AUTOGEN_DEST_DIR/.env"
+        AGENT_HOME_DIR_VM="/home/$USERNAME/autogen_agent" # Consistent with AGENT_HOME_VALUE used later
+
+        if [ -f "$HOST_ENV_FILE" ]; then
+            # Extract values from host .env (handle potential missing keys gracefully)
+            # Use grep '^KEY=' to avoid matching commented lines, then cut
+            GIT_USERNAME=$(grep '^GIT_USERNAME=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
+            GIT_TOKEN=$(grep '^GIT_TOKEN=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
+            GH_TOKEN=$(grep '^GH_TOKEN=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
+            AWS_ACCESS_KEY_ID=$(grep '^AWS_ACCESS_KEY_ID=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
+            AWS_SECRET_ACCESS_KEY=$(grep '^AWS_SECRET_ACCESS_KEY=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
+            AWS_REGION=$(grep '^AWS_REGION=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
+            AWS_ACCOUNT_ID=$(grep '^AWS_ACCOUNT_ID=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
+            OPENAI_API_KEY=$(grep '^OPENAI_API_KEY=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
+            GEMINI_API_KEYS=$(grep '^GEMINI_API_KEYS=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
+            USE_GEMINI=$(grep '^USE_GEMINI=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
+
+            # Extract the specific bot token for this user
+            USER_BOT_TOKEN_KEY="BOT_TOKEN_$USERNAME"
+            DISCORD_BOT_TOKEN=$(grep "^${USER_BOT_TOKEN_KEY}=" "$HOST_ENV_FILE" | cut -d '=' -f2-)
+
+            # Check if token was found
+            if [ -z "$DISCORD_BOT_TOKEN" ]; then
+                echo "Warning: Bot token for user $USERNAME (${USER_BOT_TOKEN_KEY}) not found in $HOST_ENV_FILE. Setting to placeholder."
+                DISCORD_BOT_TOKEN="YOUR_DISCORD_BOT_TOKEN_FOR_${USERNAME}_HERE"
+            fi
+
+            # Construct the new .env file content
+            # Overwrite the existing file
+            cat > "$VM_ENV_FILE" << EOF
+# Auto-generated .env file for user $USERNAME
+
+# --- User Specific ---
+DISCORD_BOT_TOKEN=$DISCORD_BOT_TOKEN
+BOT_USER=$USERNAME
+AGENT_HOME=$AGENT_HOME_DIR_VM
+
+# --- Shared Git/GitHub ---
+GIT_USERNAME=$GIT_USERNAME
+GIT_TOKEN=$GIT_TOKEN
+GH_TOKEN=$GH_TOKEN
+
+# --- Shared AWS ---
+AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+AWS_REGION=$AWS_REGION
+AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID
+
+# --- OpenAI Configuration ---
+OPENAI_API_KEY=$OPENAI_API_KEY
+
+# --- Gemini Configuration ---
+GEMINI_API_KEYS=$GEMINI_API_KEYS
+# Set to "true" to use Gemini, "false" or omit to use OpenAI
+USE_GEMINI=$USE_GEMINI
+EOF
+
+            echo ".env file generated at $VM_ENV_FILE"
+            # Ensure correct ownership of the generated .env file
+            chown "$USERNAME:$USERNAME" "$VM_ENV_FILE" || echo "Warning: Failed to chown $VM_ENV_FILE"
+        else
+            echo "Warning: Host environment file $HOST_ENV_FILE not found. Cannot generate VM .env file."
+            # Optionally create a placeholder .env file here if needed
+        fi
+        # --- End .env generation ---
+
+        echo "Setting up Python virtual environment and installing dependencies in $AUTOGEN_DEST_DIR..."
+        # Combine commands: cd, create venv, activate venv (within subshell), install requirements
+        sudo -i -u "$USERNAME" bash -c "cd '$AUTOGEN_DEST_DIR' && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt" || {
+            echo "Warning: Autogen Python environment setup failed. Check logs if necessary."
+        }
+        echo "Autogen Agent Python setup complete."
     else
-         echo "GIT_USERNAME already set in /home/$USERNAME/.bashrc."
+        echo "Warning: Autogen source directory $AUTOGEN_SOURCE_DIR not found. Skipping Autogen setup."
     fi
 
-    grep -q '^GIT_TOKEN='/etc/environment \
-        || echo "GIT_TOKEN=$GIT_TOKEN" | sudo tee -a /etc/environment
-    if ! grep -q "export GIT_TOKEN=$GIT_TOKEN" "/home/$USERNAME/.bashrc"; then
-        echo "Setting GIT_TOKEN environment variable in /home/$USERNAME/.bashrc ..."
-        echo '' >> "/home/$USERNAME/.bashrc" # Add a newline for separation
-        echo '# Set git token' >> "/home/$USERNAME/.bashrc"
-        echo "export GIT_TOKEN=$GIT_TOKEN" >> "/home/$USERNAME/.bashrc"
-        # Ownership should be correct if user exists or was just created
+    # --- Set AGENT_HOME Environment Variable (System-wide and User) ---
+    AGENT_HOME_VALUE="/home/$USERNAME/autogen_agent"
+    AGENT_HOME_ENV_LINE="AGENT_HOME=\"$AGENT_HOME_VALUE\"" # Format for /etc/environment
+    AGENT_HOME_BASHRC_LINE="export AGENT_HOME=$AGENT_HOME_VALUE" # Format for .bashrc
+
+    # Set system-wide in /etc/environment
+    echo "Setting AGENT_HOME system-wide in /etc/environment..."
+    # Check if the variable is already set (avoids duplicates)
+    if ! grep -qF "$AGENT_HOME_ENV_LINE" /etc/environment; then
+        # Append the variable definition to /etc/environment
+        echo "$AGENT_HOME_ENV_LINE" >> /etc/environment
+        echo "AGENT_HOME added to /etc/environment."
     else
-         echo "GIT_TOKEN already set in /home/$USERNAME/.bashrc."
+        echo "AGENT_HOME already set in /etc/environment."
     fi
 
-    # 2. Tell git to store (and re‑use) your HTTPS creds
-    git config --global credential.helper "store --file ~/.git-credentials"
-    git config --global user.email "$USERNAME@email.com"
-    git config --global user.name "$USERNAME"
-
-    # 3. Populate the credentials file
-    cat > ~/.git-credentials <<< "https://${GIT_USERNAME}:${GIT_TOKEN}@github.com"
-
-    # 4. Lock it down
-    chmod 600 ~/.git-credentials
-
-    # 5. Export the same token for the GitHub CLI
-    grep -q '^GH_TOKEN='/etc/environment \
-        || echo "GH_TOKEN=$GIT_TOKEN" | sudo tee -a /etc/environment
-    if ! grep -q "export GH_TOKEN=$GIT_TOKEN" "/home/$USERNAME/.bashrc"; then
-        echo "Setting GH_TOKEN environment variable in /home/$USERNAME/.bashrc ..."
+    # Set for the user in ~/.bashrc (for interactive shells)
+    echo "Setting AGENT_HOME for user $USERNAME in ~/.bashrc..."
+    if ! grep -qF "$AGENT_HOME_BASHRC_LINE" "/home/$USERNAME/.bashrc"; then
         echo '' >> "/home/$USERNAME/.bashrc" # Add a newline for separation
-        echo '# Set gh cli token' >> "/home/$USERNAME/.bashrc"
-        echo "export GH_TOKEN=GIT_TOKEN" >> "/home/$USERNAME/.bashrc"
-        # Ownership should be correct if user exists or was just created
+        echo '# Set Autogen Agent home directory' >> "/home/$USERNAME/.bashrc"
+        echo "$AGENT_HOME_BASHRC_LINE" >> "/home/$USERNAME/.bashrc"
+        echo "AGENT_HOME added to /home/$USERNAME/.bashrc."
     else
-         echo "GH_TOKEN already set in /home/$USERNAME/.bashrc."
+        echo "AGENT_HOME already set in /home/$USERNAME/.bashrc."
     fi
+    # Ensure ownership is correct for .bashrc
+    chown "$USERNAME:$USERNAME" "/home/$USERNAME/.bashrc" || echo "Warning: Failed to chown .bashrc for $USERNAME"
+    # Removed source command
 
-    # Check if the line already exists to avoid duplicates
+    # --- Configure Autogen Agent systemd Service ---
+    echo ">>> Configuring Autogen Agent systemd service..."
+    SERVICE_NAME="autogen-agent.service"
+    SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME"
+    AGENT_START_SCRIPT="/usr/local/bin/start_agent.sh"
+    AGENT_HOME_DIR="/home/$USERNAME/autogen_agent" # Defined earlier as AGENT_HOME_VALUE
+
+    # Create the systemd service file content
+    # Ensure User, Group, WorkingDirectory, and Environment are set correctly.
+    # Added After/Wants network-online.target assuming agent might need network.
+    # Added PATH to include user's local bin, potentially needed if start_agent uses pipx tools.
+    SERVICE_CONTENT="[Unit]
+Description=Autogen Agent Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=forking # Specify that the script forks
+PIDFile=$AGENT_HOME_DIR/.agent.pid # Tell systemd where the actual agent PID is stored
+User=$USERNAME
+Group=$(id -gn $USERNAME)
+WorkingDirectory=$AGENT_HOME_DIR
+Environment=\"PATH=/home/$USERNAME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"
+Environment=\"AGENT_HOME=$AGENT_HOME_DIR\"
+# Add a small delay before starting, just in case of network race conditions
+ExecStartPre=/bin/sleep 5
+# Explicitly activate venv and then run the start script using its full path
+# Using 'exec' ensures the agent script replaces the bash shell process
+ExecStart=/bin/bash -c 'source $AGENT_HOME_DIR/venv/bin/activate && exec /usr/local/bin/start_agent.sh'
+Restart=on-failure
+RestartSec=10s # Increased restart delay slightly
+
+[Install]
+WantedBy=multi-user.target"
+
+    # Write the service file
+    echo "Creating systemd service file at $SERVICE_FILE..."
+    echo -e "$SERVICE_CONTENT" > "$SERVICE_FILE" || { echo "Error: Failed to write systemd service file $SERVICE_FILE"; exit 1; }
+
+    # Reload systemd daemon to recognize the new service
+    echo "Reloading systemd daemon..."
+    systemctl daemon-reload || echo "Warning: systemctl daemon-reload failed."
+
+    # Enable the service to start on boot
+    echo "Enabling $SERVICE_NAME to start on boot..."
+    systemctl enable "$SERVICE_NAME" || echo "Warning: systemctl enable $SERVICE_NAME failed."
+
+    # Optionally, start the service immediately (useful for first provision)
+    echo "Starting $SERVICE_NAME immediately..."
+    systemctl start "$SERVICE_NAME" || echo "Warning: systemctl start $SERVICE_NAME failed."
+
+    echo "Autogen Agent systemd service configured and enabled."
+
+    # Removed the direct start command: sudo -i -u "$USERNAME" $AGENT_START_SCRIPT ...
+
+    # Check if the DEVCHAT_HOST_IP line already exists to avoid duplicates
     if ! grep -q 'export DEVCHAT_HOST_IP=10.0.2.2' "/home/$USERNAME/.bashrc"; then
         echo "Setting DEVCHAT_HOST_IP environment variable in /home/$USERNAME/.bashrc ..."
         echo '' >> "/home/$USERNAME/.bashrc" # Add a newline for separation
@@ -275,7 +420,6 @@ if ! command -v npm &> /dev/null; then
 else
      echo "npm already installed: $(npm -v)"
 fi
-
 
 # --- Install devchat CLI tool ---
 echo ">>> Installing devchat CLI tool wrapper..."
