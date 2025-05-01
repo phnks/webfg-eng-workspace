@@ -1,8 +1,10 @@
 # filename: autogen_discord_bot.py
 from __future__ import annotations
-import asyncio, builtins, logging, os, re, shlex, subprocess, sys, textwrap, getpass
+import asyncio, builtins, logging, os, re, shlex, subprocess, sys, textwrap, getpass, platform
 from pathlib import Path
 from typing import List, Dict, Any
+import prompts.system as system_prompt_module
+import prompts.webfgapp as webfg_app_prompt_module
 
 # ── basic setup ──────────────────────────────────────────────────────────────
 builtins.input = lambda *_: ""  # prevent stdin blocking
@@ -20,11 +22,22 @@ from dotenv import load_dotenv; load_dotenv()
 _GIT_USERNAME = os.getenv("GIT_USERNAME")
 _GIT_TOKEN = os.getenv("GIT_TOKEN")
 _GH_TOKEN = os.getenv("GH_TOKEN")
+
 if not all([_GIT_USERNAME, _GIT_TOKEN, _GH_TOKEN]):
     _LOG.warning("⚠️ Git/GitHub environment variables (GIT_USERNAME, GIT_TOKEN, GH_TOKEN) not fully set. Git/GH operations might fail. Ensure they are in the .env file.")
 else:
     _LOG.info("✅ Git/GitHub environment variables loaded.")
 
+# -- Load AWS credentials --
+_AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+_AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+_AWS_REGION = os.getenv("AWS_REGION")
+_AWS_ACCOUNT_ID = os.getenv("AWS_ACCOUNT_ID")
+
+if not all([_AWS_ACCESS_KEY_ID, _AWS_SECRET_ACCESS_KEY, _AWS_REGION, _AWS_ACCOUNT_ID]):
+    _LOG.warning("⚠️ AWS environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, AWS_ACCOUNT_ID) not fully set. AWS operations might fail. Ensure they are in the .env file.")
+else:
+    _LOG.info("✅ AWS environment variables loaded.")
 
 # ---------------------------------------------------------------------------
 # 1) dynamic user/assistant name & workspace
@@ -79,11 +92,36 @@ LocalCommandLineCodeExecutor.sanitize_command = _disabled_sanitize_command
 _LOG.warning("⚠️ Monkey-patched LocalCommandLineCodeExecutor.sanitize_command to disable safety checks.")
 # --- End Monkey-patching ---
 
-
 # ---------------------------------------------------------------------------
 # 5) Enhanced Executor with Logging
 # ---------------------------------------------------------------------------
+# --- add this helper inside your module (keep log object) -------------------
+def _run_large_bash(code: str, work_dir: Path, timeout: int) -> CommandLineCodeResult:
+    """
+    Write long bash code to a temp file and execute it to bypass ARG_MAX.
+    Returns a CommandLineCodeResult compatible with AutoGen.
+    """
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".sh", dir=work_dir) as fh:
+        fh.write(textwrap.dedent(code))
+        tmp_script = Path(fh.name)
+    os.chmod(tmp_script, 0o755)
+
+    proc = subprocess.run(
+        ["bash", str(tmp_script)],
+        cwd=work_dir,
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+    )
+    # cleanup if you like: tmp_script.unlink(missing_ok=True)
+    return CommandLineCodeResult(
+        exit_code=proc.returncode,
+        output=proc.stdout + proc.stderr,
+    )
+# ---------------------------------------------------------------------------
+
 class EnhancedLocalExecutor(LocalCommandLineCodeExecutor):
+    ARG_MAX_SAFETY = 1_500_000        # bytes – stay below kernel limit
     # No longer need the sanitize_command override here, as the base class is patched.
     # Expanded list of common languages
     KNOWN_LANGUAGES = {
@@ -134,8 +172,6 @@ class EnhancedLocalExecutor(LocalCommandLineCodeExecutor):
         exit_codes = []
         outputs = []
         for block in code_blocks:
-            # Correct attribute access from .lang to .language
-            # Correct attribute access from .lang to .language
             language = block.language.lower()
             code = block.code
 
@@ -154,6 +190,9 @@ class EnhancedLocalExecutor(LocalCommandLineCodeExecutor):
             # Execute known language block using the parent method for a single block
             # This assumes the parent method can handle a list with one item.
             try:
+                if language in {"bash", "shell", "sh"} and len(code.encode()) > self.ARG_MAX_SAFETY:
+                    _LOG.info("Large bash snippet detected – executing via temp script to avoid ARG_MAX")
+                    return _run_large_bash(code, self.work_dir, self.timeout)
                 # We call the super method with a list containing only the current block
                 single_block_result: CommandLineCodeResult = super().execute_code_blocks([block])
                 _LOG.debug(f"Execution result (Exit Code {single_block_result.exit_code}):\n---\n{single_block_result.output}\n---")
@@ -192,7 +231,19 @@ class EnhancedLocalExecutor(LocalCommandLineCodeExecutor):
 # This effectively disables the timeout for practical purposes.
 _24_HOURS_IN_SECONDS = 24 * 60 * 60
 executor = EnhancedLocalExecutor(work_dir=str(HOME_DIR), timeout=_24_HOURS_IN_SECONDS)
+executor.max_output_len = None          # None = no truncation
 
+# --- Determine OS and Shell for System Prompt ---
+OS_NAME = platform.system()
+DEFAULT_SHELL = os.environ.get('SHELL', '/bin/bash' if OS_NAME != "Windows" else "cmd.exe")
+os.environ["BASH_ENV"] = str(AGENT_HOME + "/tools.sh")
+
+base_system_prompt = textwrap.dedent(system_prompt_module.SYSTEM_PROMPT(
+    BOT_USER, str(HOME_DIR), DEFAULT_SHELL, OS_NAME
+)).strip()
+_LOG.info("✅ Loaded system prompt with, BOT_USER=" + BOT_USER + " HOME_DIR=" + str(HOME_DIR) + " DEFAULT_SHELL=" + DEFAULT_SHELL + " OS_NAME=" + OS_NAME)
+
+header = textwrap.dedent(webfg_app_prompt_module.WEBFG_APP_PROMPT()).strip()
 
 # ---------------------------------------------------------------------------
 # 6) LLM config
@@ -209,17 +260,7 @@ llm_config = {
 assistant = autogen.AssistantAgent(
     name=BOT_USER,
     llm_config=llm_config,
-    system_message=textwrap.dedent(f"""
-        You are **{BOT_USER}**, an autonomous coding-assistant running in a Discord bot.
-        Working directory: `{HOME_DIR}`, you have full access via sudo.
-
-        • ALWAYS run real commands.
-        • For servers, use: nohup <cmd> >server.log 2>&1 & disown
-        • Wrap shell code in ```bash ...```.
-        • Never put sample output in backticks.
-        • Prefix commands with sudo if needed.
-        • Reply exactly **TERMINATE** when done.
-    """).strip(),
+    system_message=base_system_prompt + "\\n\\n" + header
 )
 user_proxy = autogen.UserProxyAgent(
     name="user_proxy",
@@ -289,55 +330,161 @@ def _handle_host_cmd(cmd: str, args: List[str]) -> tuple[str, str]:
         out = _run("/usr/local/bin/stop_agent.sh").decode(); return ("Agent stopped", out or "(no output)")
     if cmd == "logs":
         n = int(args[0]) if args else 50
-        out = _run(["tail", "-n", str(n), f"{AGENT_HOME}/agent.log"]).decode()
-        return (f"Last {n} log lines", out or "(empty)")
+        out = _run(["tail", "-n", str(n), f"{AGENT_HOME}/.agent.log"]).decode()
+        return (f"Last {n} log lines", f"{out}")
     if cmd == "interrupt": return ("", "")
     raise ValueError(cmd)
 
 # ---------------------------------------------------------------------------
-# 10) main request handler
+# 10) Result Processing Helper & Main Request Handler
 # ---------------------------------------------------------------------------
+async def _process_and_send_result(ch: discord.abc.Messageable, chat_result: Any):
+    """Processes the chat result and sends the final message to Discord."""
+    if not chat_result:
+         _LOG.error("Internal state error: _process_and_send_result called with no chat result.")
+         await ch.send("⚠️ Internal state error: Processing failed due to missing chat result.")
+         return
+
+    # Process execution results automatically included by executor
+    # Send only last assistant content without codeblocks
+    last = None
+    for msg in reversed(chat_result.chat_history):
+        if msg.get("name") == BOT_USER and msg.get("content","").strip():
+            last = msg["content"].strip(); break
+    if not last:
+         _LOG.warning("No reply content generated by assistant in the final result.")
+         await ch.send("⚠️ No reply generated by the agent.")
+         return
+
+    cleaned = re.sub(r"```.*?```", "", last, flags=re.DOTALL).strip()
+    # Use _send_long to handle potential long messages and avoid Discord 2000 char limit
+    if cleaned: # Only send if there's content after cleaning
+         await _send_long(ch, cleaned)
+    else:
+         # If cleaning removed everything (e.g., response was only code blocks), send a notification.
+         _LOG.info("Agent response contained only code blocks (executed, not displayed).")
+         await ch.send("ℹ️ Agent response contained only code blocks (executed, not displayed). Task likely completed.")
+
+
 async def _handle_request(ch: discord.abc.Messageable, content: str):
     lock = _channel_locks.setdefault(ch.id, asyncio.Lock())
     async with lock:
-        try:
-            await ch.typing()
-            header = textwrap.dedent(f"""
-                You are **{BOT_USER}**, an autonomous coding-assistant running in a Discord bot.
-                Working directory: `{HOME_DIR}`, you have full access via sudo.
+        # chat_result = None # No longer needed here, defined within try/except scopes
+        loop = asyncio.get_running_loop()
 
-                • ALWAYS run real commands.
-                • For servers, use: nohup <cmd> >server.log 2>&1 & disown
-                • Wrap shell code in ```bash ...```.
-                • Never put sample output in backticks.
-                • Prefix commands with sudo if needed.
-                • Reply exactly **TERMINATE** when done.
-            """).strip()
-            loop = asyncio.get_running_loop()
+        try:
+            await ch.typing() # Indicate activity
+
+            # --- Initiate Chat ---
+            # The GeminiRetryWrapper handles lower-level API retries.
+            # We catch specific errors here to manage the conversation flow.
+            _LOG.info("Calling user_proxy.initiate_chat...")
             chat_result = await loop.run_in_executor(
                 None,
                 lambda: user_proxy.initiate_chat(
                     assistant,
-                    message=f"{header}\n\n{content}",
-                    clear_history=False,
+                    message=content,
+                    clear_history=False, # Keep history for context, wrapper handles pruning
                 )
             )
-            # process execution results automatically included by executor
-            # send only last assistant content without codeblocks
-            last = None
-            for msg in reversed(chat_result.chat_history):
-                if msg.get("name") == BOT_USER and msg.get("content","").strip():
-                    last = msg["content"].strip(); break
-            if not last:
-                await ch.send("⚠️ No reply generated.")
-                return
-            cleaned = re.sub(r"```.*?```", "", last, flags=re.DOTALL).strip()
-            await ch.send(cleaned)
+            _LOG.info("Initial initiate_chat completed.")
+
+            # --- Process successful chat_result using helper ---
+            await _process_and_send_result(ch, chat_result)
+
+        # --- Exception Handling ---
         except asyncio.CancelledError:
-            await ch.send("🚫 Task cancelled."); raise
-        except Exception as exc:
-            _LOG.error("Handler error: %s", exc, exc_info=True)
-            await ch.send(f"⚠️ Internal error: {exc}")
+            _LOG.info("Task cancelled by user during initial execution.")
+            await ch.send("🚫 Task cancelled.")
+            # Let the lock release naturally.
+
+        except RuntimeError as rt_exc:
+            error_message = str(rt_exc)
+
+            # ── NEW: regex for Gemini’s 1 048 576-token hard-limit error ──
+            TOKEN_LIMIT_RE = re.compile(r"input token count \\(\\d+\\) exceeds", re.I)
+
+            # A) Gemini “list index out of range” bug (existing branch)
+            if "Google GenAI exception occurred" in error_message and "list index out of range" in error_message:
+                _LOG.error(f"Caught specific Gemini API 'list index out of range' error: {rt_exc}. Attempting recovery.")
+                await ch.send("⚠️ The AI model returned an invalid response. Attempting automatic recovery by restarting interaction...")
+
+                # --- Attempt Recovery ---
+                recovery_prompt = (
+                    "The previous attempt failed due to an internal API error (invalid/empty response structure). "
+                    "Please process the original request again, trying a different approach or simplifying the response structure if possible, "
+                    "while still aiming to fulfill the user's goal.\n"
+                    f"Original request was: {content}" # Re-inject original request for context
+                )
+                try:
+                    await ch.typing()
+                    _LOG.info("Calling user_proxy.initiate_chat for recovery...")
+                    # Use clear_history=True to start fresh for the recovery attempt
+                    recovery_chat_result = await loop.run_in_executor(
+                        None,
+                        lambda: user_proxy.initiate_chat(
+                            assistant,
+                            message=f"{recovery_prompt}",
+                            clear_history=False,
+                        )
+                    )
+                    _LOG.info("Recovery initiate_chat completed.")
+                    # Process the result of the recovery attempt
+                    await _process_and_send_result(ch, recovery_chat_result)
+
+                except asyncio.CancelledError:
+                     _LOG.info("Recovery task cancelled by user.")
+                     await ch.send("🚫 Recovery attempt cancelled.")
+                except Exception as recovery_exc:
+                    _LOG.error(f"Error during recovery attempt: {recovery_exc}", exc_info=True)
+                    await ch.send(f"⚠️ Automatic recovery failed: {recovery_exc}")
+                # End of recovery attempt, return regardless of success/failure of recovery
+                return
+
+            # B) Gemini global-context hard limit – start fresh and retry once
+            elif TOKEN_LIMIT_RE.search(error_message):
+                _LOG.warning("Conversation too long; invoking extra pruning and retrying.")
+                await ch.send(
+                    "⚠️ The conversation got too large for Gemini. "
+                    "I’m pruning the oldest turns (keeping the system prompt) and will try again."
+                )
+
+                # Tighten the wrapper’s token budget by 20 % for this retry.
+                import gemini_retry_wrapper as _grw
+                _grw.MAX_TOTAL_TOKENS = max(256_000, int(_grw.MAX_TOTAL_TOKENS * 0.8))
+
+                await ch.typing()
+                chat_result = await loop.run_in_executor(
+                    None,
+                    lambda: user_proxy.initiate_chat(
+                        assistant,
+                        message=content,       # same prompt
+                        clear_history=False,   # keep recent context
+                    ),
+                )
+                await _process_and_send_result(ch, chat_result)
+                return
+
+            # C) Anything else – bubble up unchanged
+            else:
+                _LOG.error(f"Unhandled RuntimeError in handler: {rt_exc}", exc_info=True)
+                raise rt_exc
+
+        except Exception as exc: # Catch other unexpected errors
+            error_message = str(exc)
+            # Regex pattern for the total context token limit error (e.g., ~1M limit)
+            gemini_total_token_error = r"400.*input token count \(\d+\) exceeds the maximum.*allowed \(\d+\)"
+
+            # Check if the error is the Gemini total token limit error
+            if re.search(gemini_total_token_error, error_message, re.IGNORECASE | re.DOTALL):
+                 _LOG.warning(f"Gemini total context token limit error encountered: {error_message}")
+                 await ch.send("⚠️ The conversation history became too long for the AI model (total limit). "
+                               "The request failed for this turn. Please try starting a fresh conversation (e.g., using `/interrupt` then re-prompting).")
+                 # Let the lock release.
+            else:
+                # Handle other, unexpected exceptions
+                _LOG.error(f"Unhandled Exception in handler: {exc}", exc_info=True)
+                await ch.send(f"⚠️ An unexpected internal error occurred: {exc}")
 
 # ---------------------------------------------------------------------------
 # 11) Discord event handlers
@@ -359,7 +506,7 @@ async def on_message(msg: discord.Message):
             return
         try:
             title, out = _handle_host_cmd(cmd, args)
-            await _send_long(msg.channel, f"**{title}**\n```\n{out}\n```")
+            await _send_long(msg.channel, f"**{title}**\n```{out}```")
         except Exception as e:
             await msg.channel.send(f"⚠️ {e}")
         return

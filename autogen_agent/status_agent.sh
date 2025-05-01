@@ -10,7 +10,7 @@ cd "$AGENT_HOME" || {
     exit 1
 }
 
-PID_FILE="$AGENT_HOME/agent.pid"
+PID_FILE="$AGENT_HOME/.agent.pid"
 SCRIPT_NAME="autogen_discord_bot.py"
 
 # Check using PID file first
