@@ -329,9 +329,8 @@ def _handle_host_cmd(cmd: str, args: List[str]) -> tuple[str, str]:
     if cmd == "stop":
         out = _run("/usr/local/bin/stop_agent.sh").decode(); return ("Agent stopped", out or "(no output)")
     if cmd == "logs":
-        n = int(args[0]) if args else 50
-        out = _run(["tail", "-n", str(n), f"{AGENT_HOME}/.agent.log"]).decode()
-        return (f"Last {n} log lines", f"{out}")
+        out = _run(["/usr/local/bin/get_logs.sh", str(args[0])]).decode()
+        return (f"Last {n} log lines", out or "(no output)")
     if cmd == "interrupt": return ("", "")
     raise ValueError(cmd)
 
