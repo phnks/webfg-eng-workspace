@@ -327,6 +327,7 @@ EOF
         # Add variables extracted earlier (ensure they are available in this scope)
         # Note: AGENT_HOME is already handled separately later, so skipping here.
         # Pass name and value explicitly
+        add_to_bashrc "AGENT_HOME" "$AGENT_HOME_DIR_VM"
         add_to_bashrc "DISCORD_BOT_TOKEN" "$DISCORD_BOT_TOKEN"
         add_to_bashrc "BOT_USER" "$USERNAME" # Use $USERNAME directly
         add_to_bashrc "GIT_USERNAME" "$GIT_USERNAME"
@@ -386,16 +387,9 @@ EOF
             # echo "$var_name already set in /etc/environment."
         fi
     }
-    # Function to add var to user .bashrc if not present (defined earlier, re-used here)
-    # add_to_bashrc() { ... } # Assumes function is still defined or re-define if needed
 
-    # Set AGENT_HOME (already done in .bashrc by add_to_bashrc)
     AGENT_HOME_VALUE="/home/$USERNAME/autogen_agent"
     add_to_etc_environment "AGENT_HOME" "$AGENT_HOME_VALUE"
-    # No need to call add_to_bashrc for AGENT_HOME again if it's done above
-
-    # Set other variables system-wide (using values extracted earlier)
-    # Ensure the variables are still in scope from the .env generation block
     add_to_etc_environment "DISCORD_BOT_TOKEN" "$DISCORD_BOT_TOKEN"
     add_to_etc_environment "BOT_USER" "$USERNAME" # Use $USERNAME directly
     add_to_etc_environment "GIT_USERNAME" "$GIT_USERNAME"
