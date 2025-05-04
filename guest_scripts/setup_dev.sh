@@ -214,20 +214,21 @@ if [ -f "/home/$USERNAME/.bashrc" ]; then
     # --- Autogen Agent Setup ---
     echo ">>> Setting up Autogen Agent for user $USERNAME..."
     AUTOGEN_SOURCE_DIR="/vagrant/autogen_agent"
-    AUTOGEN_DEST_DIR="/home/$USERNAME/autogen_agent"
+    AUTOGEN_DEST_DIR="/home/$USERNAME"
     if [ -d "$AUTOGEN_SOURCE_DIR" ]; then
         echo "Copying autogen_agent directory from $AUTOGEN_SOURCE_DIR to $AUTOGEN_DEST_DIR..."
         # Copy the directory recursively
         cp -r "$AUTOGEN_SOURCE_DIR" "$AUTOGEN_DEST_DIR" || echo "Warning: Failed to copy autogen_agent directory."
 
-        echo "Setting ownership of $AUTOGEN_DEST_DIR for user $USERNAME..."
-        chown -R "$USERNAME:$USERNAME" "$AUTOGEN_DEST_DIR" || echo "Warning: Failed to chown $AUTOGEN_DEST_DIR."
+        AGENT_HOME_DIR_VM="/home/$USERNAME/autogen_agent" # Consistent with AGENT_HOME_VALUE used later
+
+        echo "Setting ownership of $AGENT_HOME_DIR_VM for user $USERNAME..."
+        chown -R "$USERNAME:$USERNAME" "$AGENT_HOME_DIR_VM" || echo "Warning: Failed to chown $AGENT_HOME_DIR_VM."
 
         # --- Generate VM-specific .env file ---
         echo "Generating VM-specific .env file for $USERNAME..."
         HOST_ENV_FILE="/vagrant/host_service/.env"
-        VM_ENV_FILE="$AUTOGEN_DEST_DIR/.env"
-        AGENT_HOME_DIR_VM="/home/$USERNAME/autogen_agent" # Consistent with AGENT_HOME_VALUE used later
+        VM_ENV_FILE="$AGENT_HOME_DIR_VM/.env"
 
         # Declare variables to hold extracted values
         GIT_USERNAME=""
@@ -362,9 +363,9 @@ EOF
         # --- End Git Credential Config ---
 
 
-        echo "Setting up Python virtual environment and installing dependencies in $AUTOGEN_DEST_DIR..."
+        echo "Setting up Python virtual environment and installing dependencies in $AGENT_HOME_DIR_VM..."
         # Combine commands: cd, create venv, activate venv (within subshell), install requirements
-        sudo -i -u "$USERNAME" bash -c "cd '$AUTOGEN_DEST_DIR' && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt" || {
+        sudo -i -u "$USERNAME" bash -c "cd '$AGENT_HOME_DIR_VM' && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt" || {
             echo "Warning: Autogen Python environment setup failed. Check logs if necessary."
         }
         echo "Autogen Agent Python setup complete."
