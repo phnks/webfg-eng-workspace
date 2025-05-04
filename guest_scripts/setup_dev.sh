@@ -185,6 +185,7 @@ if [ -f "/home/$USERNAME/.bashrc" ]; then
         cp "$AGENT_SCRIPTS_SOURCE_DIR/status_agent.sh" \
            "$AGENT_SCRIPTS_SOURCE_DIR/restart_agent.sh" \
            "$AGENT_SCRIPTS_SOURCE_DIR/stop_agent.sh" \
+           "$AGENT_SCRIPTS_SOURCE_DIR/get_logs.sh" \
            "$AGENT_SCRIPTS_SOURCE_DIR/start_agent.sh" \
            "$AGENT_SCRIPTS_DEST_DIR/" || echo "Warning: Failed to copy agent scripts."
 
@@ -192,6 +193,7 @@ if [ -f "/home/$USERNAME/.bashrc" ]; then
         chmod +x "$AGENT_SCRIPTS_DEST_DIR/status_agent.sh" \
                  "$AGENT_SCRIPTS_DEST_DIR/restart_agent.sh" \
                  "$AGENT_SCRIPTS_DEST_DIR/stop_agent.sh" \
+                 "$AGENT_SCRIPTS_DEST_DIR/get_logs.sh" \
                  "$AGENT_SCRIPTS_DEST_DIR/start_agent.sh" || echo "Warning: Failed to chmod agent scripts."
 
         # Grant NOPASSWD sudo rights to the user for these specific scripts (Safer than ALL)
@@ -212,20 +214,34 @@ if [ -f "/home/$USERNAME/.bashrc" ]; then
     # --- Autogen Agent Setup ---
     echo ">>> Setting up Autogen Agent for user $USERNAME..."
     AUTOGEN_SOURCE_DIR="/vagrant/autogen_agent"
-    AUTOGEN_DEST_DIR="/home/$USERNAME/autogen_agent"
+    AUTOGEN_DEST_DIR="/home/$USERNAME"
     if [ -d "$AUTOGEN_SOURCE_DIR" ]; then
         echo "Copying autogen_agent directory from $AUTOGEN_SOURCE_DIR to $AUTOGEN_DEST_DIR..."
         # Copy the directory recursively
         cp -r "$AUTOGEN_SOURCE_DIR" "$AUTOGEN_DEST_DIR" || echo "Warning: Failed to copy autogen_agent directory."
 
-        echo "Setting ownership of $AUTOGEN_DEST_DIR for user $USERNAME..."
-        chown -R "$USERNAME:$USERNAME" "$AUTOGEN_DEST_DIR" || echo "Warning: Failed to chown $AUTOGEN_DEST_DIR."
+        AGENT_HOME_DIR_VM="/home/$USERNAME/autogen_agent" # Consistent with AGENT_HOME_VALUE used later
+
+        echo "Setting ownership of $AGENT_HOME_DIR_VM for user $USERNAME..."
+        chown -R "$USERNAME:$USERNAME" "$AGENT_HOME_DIR_VM" || echo "Warning: Failed to chown $AGENT_HOME_DIR_VM."
 
         # --- Generate VM-specific .env file ---
         echo "Generating VM-specific .env file for $USERNAME..."
         HOST_ENV_FILE="/vagrant/host_service/.env"
-        VM_ENV_FILE="$AUTOGEN_DEST_DIR/.env"
-        AGENT_HOME_DIR_VM="/home/$USERNAME/autogen_agent" # Consistent with AGENT_HOME_VALUE used later
+        VM_ENV_FILE="$AGENT_HOME_DIR_VM/.env"
+
+        # Declare variables to hold extracted values
+        GIT_USERNAME=""
+        GIT_TOKEN=""
+        GH_TOKEN=""
+        AWS_ACCESS_KEY_ID=""
+        AWS_SECRET_ACCESS_KEY=""
+        AWS_REGION=""
+        AWS_ACCOUNT_ID=""
+        OPENAI_API_KEY=""
+        GEMINI_API_KEYS=""
+        USE_GEMINI=""
+        DISCORD_BOT_TOKEN=""
 
         if [ -f "$HOST_ENV_FILE" ]; then
             # Extract values from host .env (handle potential missing keys gracefully)
@@ -290,9 +306,65 @@ EOF
         fi
         # --- End .env generation ---
 
-        echo "Setting up Python virtual environment and installing dependencies in $AUTOGEN_DEST_DIR..."
+        # --- Set Generated Env Vars in User .bashrc ---
+        echo "Setting generated environment variables in /home/$USERNAME/.bashrc..."
+        BASHRC_FILE="/home/$USERNAME/.bashrc"
+        # Function to add export line if not present
+        add_to_bashrc() {
+            # Use direct variable values passed to function for safety/compatibility
+            local export_line="export $1=\"$2\"" # Use $1 for name, $2 for value
+            local comment="# Added by setup_dev.sh for $1"
+            # Use grep -qF to match fixed string exactly
+            if ! grep -qF "$export_line" "$BASHRC_FILE"; then
+                echo "" >> "$BASHRC_FILE" # Add newline
+                echo "$comment" >> "$BASHRC_FILE"
+                echo "$export_line" >> "$BASHRC_FILE"
+                echo "$1 added to $BASHRC_FILE."
+            # else
+                # echo "$1 already set in $BASHRC_FILE." # Reduce verbosity
+            fi
+        }
+
+        # Add variables extracted earlier (ensure they are available in this scope)
+        # Note: AGENT_HOME is already handled separately later, so skipping here.
+        # Pass name and value explicitly
+        add_to_bashrc "AGENT_HOME" "$AGENT_HOME_DIR_VM"
+        add_to_bashrc "DISCORD_BOT_TOKEN" "$DISCORD_BOT_TOKEN"
+        add_to_bashrc "BOT_USER" "$USERNAME" # Use $USERNAME directly
+        add_to_bashrc "GIT_USERNAME" "$GIT_USERNAME"
+        add_to_bashrc "GIT_TOKEN" "$GIT_TOKEN"
+        add_to_bashrc "GH_TOKEN" "$GH_TOKEN"
+        add_to_bashrc "AWS_ACCESS_KEY_ID" "$AWS_ACCESS_KEY_ID"
+        add_to_bashrc "AWS_SECRET_ACCESS_KEY" "$AWS_SECRET_ACCESS_KEY"
+        add_to_bashrc "AWS_REGION" "$AWS_REGION"
+        add_to_bashrc "AWS_ACCOUNT_ID" "$AWS_ACCOUNT_ID"
+        add_to_bashrc "OPENAI_API_KEY" "$OPENAI_API_KEY"
+        add_to_bashrc "GEMINI_API_KEYS" "$GEMINI_API_KEYS"
+        add_to_bashrc "USE_GEMINI" "$USE_GEMINI"
+
+        # Ensure ownership after modifications
+        chown "$USERNAME:$USERNAME" "$BASHRC_FILE" || echo "Warning: Failed to chown $BASHRC_FILE after adding env vars."
+        echo "Environment variables checked/added to .bashrc."
+        # --- End Env Var Setup ---
+
+        # --- Configure Git Credentials ---
+        echo "Configuring Git credential helper for user $USERNAME..."
+        # Run git config commands as the user
+        # Ensure GIT_USERNAME and GIT_TOKEN are available for the subshell
+        # We need to pass the values explicitly to the sudo subshell
+        sudo -i -u "$USERNAME" GIT_USERNAME_VAL="$GIT_USERNAME" GIT_TOKEN_VAL="$GIT_TOKEN" bash -c ' \
+            git config --global credential.helper "store --file ~/.git-credentials" && \
+            git config --global user.email "$USER@email.com" && \
+            git config --global user.name "$USER" && \
+            echo "https://\${GIT_USERNAME_VAL}:\${GIT_TOKEN_VAL}@github.com" > ~/.git-credentials && \
+            chmod 600 ~/.git-credentials \
+        ' || echo "Warning: Failed to configure git credentials for $USERNAME."
+        echo "Git credentials configured."
+        # --- End Git Credential Config ---
+
+        echo "Setting up Python virtual environment and installing dependencies in $AGENT_HOME_DIR_VM..."
         # Combine commands: cd, create venv, activate venv (within subshell), install requirements
-        sudo -i -u "$USERNAME" bash -c "cd '$AUTOGEN_DEST_DIR' && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt" || {
+        sudo -i -u "$USERNAME" bash -c "cd '$AGENT_HOME_DIR_VM' && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt" || {
             echo "Warning: Autogen Python environment setup failed. Check logs if necessary."
         }
         echo "Autogen Agent Python setup complete."
@@ -300,35 +372,40 @@ EOF
         echo "Warning: Autogen source directory $AUTOGEN_SOURCE_DIR not found. Skipping Autogen setup."
     fi
 
-    # --- Set AGENT_HOME Environment Variable (System-wide and User) ---
+    # --- Set Environment Variables (System-wide and User) ---
+    echo "Setting environment variables system-wide (/etc/environment) and for user ($USERNAME)..."
+    # Function to add var to /etc/environment if not present
+    add_to_etc_environment() {
+        local var_name="$1"
+        local var_value="$2"
+        local env_line="$var_name=\"$var_value\"" # Format: VAR="VALUE"
+        # Use grep -qF to match fixed string exactly
+        if ! grep -qF "$env_line" /etc/environment; then
+            echo "$env_line" >> /etc/environment
+            echo "$var_name added to /etc/environment."
+        # else
+            # echo "$var_name already set in /etc/environment."
+        fi
+    }
+
     AGENT_HOME_VALUE="/home/$USERNAME/autogen_agent"
-    AGENT_HOME_ENV_LINE="AGENT_HOME=\"$AGENT_HOME_VALUE\"" # Format for /etc/environment
-    AGENT_HOME_BASHRC_LINE="export AGENT_HOME=$AGENT_HOME_VALUE" # Format for .bashrc
+    add_to_etc_environment "AGENT_HOME" "$AGENT_HOME_VALUE"
+    add_to_etc_environment "DISCORD_BOT_TOKEN" "$DISCORD_BOT_TOKEN"
+    add_to_etc_environment "BOT_USER" "$USERNAME" # Use $USERNAME directly
+    add_to_etc_environment "GIT_USERNAME" "$GIT_USERNAME"
+    add_to_etc_environment "GIT_TOKEN" "$GIT_TOKEN"
+    add_to_etc_environment "GH_TOKEN" "$GH_TOKEN"
+    add_to_etc_environment "AWS_ACCESS_KEY_ID" "$AWS_ACCESS_KEY_ID"
+    add_to_etc_environment "AWS_SECRET_ACCESS_KEY" "$AWS_SECRET_ACCESS_KEY"
+    add_to_etc_environment "AWS_REGION" "$AWS_REGION"
+    add_to_etc_environment "AWS_ACCOUNT_ID" "$AWS_ACCOUNT_ID"
+    add_to_etc_environment "OPENAI_API_KEY" "$OPENAI_API_KEY"
+    add_to_etc_environment "GEMINI_API_KEYS" "$GEMINI_API_KEYS"
+    add_to_etc_environment "USE_GEMINI" "$USE_GEMINI"
 
-    # Set system-wide in /etc/environment
-    echo "Setting AGENT_HOME system-wide in /etc/environment..."
-    # Check if the variable is already set (avoids duplicates)
-    if ! grep -qF "$AGENT_HOME_ENV_LINE" /etc/environment; then
-        # Append the variable definition to /etc/environment
-        echo "$AGENT_HOME_ENV_LINE" >> /etc/environment
-        echo "AGENT_HOME added to /etc/environment."
-    else
-        echo "AGENT_HOME already set in /etc/environment."
-    fi
+    echo "System-wide environment variables checked/added to /etc/environment."
+    # --- End System/User Env Var Setup ---
 
-    # Set for the user in ~/.bashrc (for interactive shells)
-    echo "Setting AGENT_HOME for user $USERNAME in ~/.bashrc..."
-    if ! grep -qF "$AGENT_HOME_BASHRC_LINE" "/home/$USERNAME/.bashrc"; then
-        echo '' >> "/home/$USERNAME/.bashrc" # Add a newline for separation
-        echo '# Set Autogen Agent home directory' >> "/home/$USERNAME/.bashrc"
-        echo "$AGENT_HOME_BASHRC_LINE" >> "/home/$USERNAME/.bashrc"
-        echo "AGENT_HOME added to /home/$USERNAME/.bashrc."
-    else
-        echo "AGENT_HOME already set in /home/$USERNAME/.bashrc."
-    fi
-    # Ensure ownership is correct for .bashrc
-    chown "$USERNAME:$USERNAME" "/home/$USERNAME/.bashrc" || echo "Warning: Failed to chown .bashrc for $USERNAME"
-    # Removed source command
 
     # --- Configure Autogen Agent systemd Service ---
     echo ">>> Configuring Autogen Agent systemd service..."
@@ -341,6 +418,7 @@ EOF
     # Ensure User, Group, WorkingDirectory, and Environment are set correctly.
     # Added After/Wants network-online.target assuming agent might need network.
     # Added PATH to include user's local bin, potentially needed if start_agent uses pipx tools.
+    # Systemd services DO NOT inherit /etc/environment by default, so we still need Environment= here.
     SERVICE_CONTENT="[Unit]
 Description=Autogen Agent Service
 After=network-online.target
@@ -354,6 +432,18 @@ Group=$(id -gn $USERNAME)
 WorkingDirectory=$AGENT_HOME_DIR
 Environment=\"PATH=/home/$USERNAME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"
 Environment=\"AGENT_HOME=$AGENT_HOME_DIR\"
+Environment=\"DISCORD_BOT_TOKEN=$DISCORD_BOT_TOKEN\"
+Environment=\"BOT_USER=$USERNAME\"
+Environment=\"GIT_USERNAME=$GIT_USERNAME\"
+Environment=\"GIT_TOKEN=$GIT_TOKEN\"
+Environment=\"GH_TOKEN=$GH_TOKEN\"
+Environment=\"AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID\"
+Environment=\"AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY\"
+Environment=\"AWS_REGION=$AWS_REGION\"
+Environment=\"AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID\"
+Environment=\"OPENAI_API_KEY=$OPENAI_API_KEY\"
+Environment=\"GEMINI_API_KEYS=$GEMINI_API_KEYS\"
+Environment=\"USE_GEMINI=$USE_GEMINI\"
 # Add a small delay before starting, just in case of network race conditions
 ExecStartPre=/bin/sleep 5
 # Explicitly activate venv and then run the start script using its full path
