@@ -362,7 +362,6 @@ EOF
         echo "Git credentials configured."
         # --- End Git Credential Config ---
 
-
         echo "Setting up Python virtual environment and installing dependencies in $AGENT_HOME_DIR_VM..."
         # Combine commands: cd, create venv, activate venv (within subshell), install requirements
         sudo -i -u "$USERNAME" bash -c "cd '$AGENT_HOME_DIR_VM' && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt" || {
