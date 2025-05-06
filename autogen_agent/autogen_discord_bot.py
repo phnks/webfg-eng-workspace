@@ -230,7 +230,7 @@ class EnhancedLocalExecutor(LocalCommandLineCodeExecutor):
 # Set timeout to a very large value (e.g., 24 hours) instead of None to avoid TypeError
 # This effectively disables the timeout for practical purposes.
 _24_HOURS_IN_SECONDS = 24 * 60 * 60
-executor = EnhancedLocalExecutor(work_dir=str(HOME_DIR), timeout=_24_HOURS_IN_SECONDS)
+executor = EnhancedLocalExecutor(work_dir=str(HOME_DIR), timeout=_24_HOURS_IN_SECONDS, max_output_tokens=200_000)
 executor.max_output_len = None          # None = no truncation
 
 # --- Determine OS and Shell for System Prompt ---

@@ -237,6 +237,7 @@ if [ -f "/home/$USERNAME/.bashrc" ]; then
         AWS_ACCESS_KEY_ID=""
         AWS_SECRET_ACCESS_KEY=""
         AWS_REGION=""
+        AWS_DEFAULT_REGION=""
         AWS_ACCOUNT_ID=""
         OPENAI_API_KEY=""
         GEMINI_API_KEYS=""
@@ -252,6 +253,7 @@ if [ -f "/home/$USERNAME/.bashrc" ]; then
             AWS_ACCESS_KEY_ID=$(grep '^AWS_ACCESS_KEY_ID=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
             AWS_SECRET_ACCESS_KEY=$(grep '^AWS_SECRET_ACCESS_KEY=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
             AWS_REGION=$(grep '^AWS_REGION=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
+            AWS_DEFAULT_REGION=$(grep '^AWS_DEFAULT_REGION=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
             AWS_ACCOUNT_ID=$(grep '^AWS_ACCOUNT_ID=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
             OPENAI_API_KEY=$(grep '^OPENAI_API_KEY=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
             GEMINI_API_KEYS=$(grep '^GEMINI_API_KEYS=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
@@ -286,6 +288,7 @@ GH_TOKEN=$GH_TOKEN
 AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
 AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
 AWS_REGION=$AWS_REGION
+AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION
 AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID
 
 # --- OpenAI Configuration ---
@@ -337,6 +340,7 @@ EOF
         add_to_bashrc "AWS_ACCESS_KEY_ID" "$AWS_ACCESS_KEY_ID"
         add_to_bashrc "AWS_SECRET_ACCESS_KEY" "$AWS_SECRET_ACCESS_KEY"
         add_to_bashrc "AWS_REGION" "$AWS_REGION"
+        add_to_bashrc "AWS_DEFAULT_REGION" "$AWS_DEFAULT_REGION"
         add_to_bashrc "AWS_ACCOUNT_ID" "$AWS_ACCOUNT_ID"
         add_to_bashrc "OPENAI_API_KEY" "$OPENAI_API_KEY"
         add_to_bashrc "GEMINI_API_KEYS" "$GEMINI_API_KEYS"
@@ -398,6 +402,7 @@ EOF
     add_to_etc_environment "AWS_ACCESS_KEY_ID" "$AWS_ACCESS_KEY_ID"
     add_to_etc_environment "AWS_SECRET_ACCESS_KEY" "$AWS_SECRET_ACCESS_KEY"
     add_to_etc_environment "AWS_REGION" "$AWS_REGION"
+    add_to_etc_environment "AWS_DEFAULT_REGION" "$AWS_DEFAULT_REGION"
     add_to_etc_environment "AWS_ACCOUNT_ID" "$AWS_ACCOUNT_ID"
     add_to_etc_environment "OPENAI_API_KEY" "$OPENAI_API_KEY"
     add_to_etc_environment "GEMINI_API_KEYS" "$GEMINI_API_KEYS"
@@ -440,6 +445,7 @@ Environment=\"GH_TOKEN=$GH_TOKEN\"
 Environment=\"AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID\"
 Environment=\"AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY\"
 Environment=\"AWS_REGION=$AWS_REGION\"
+Environment=\"AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION\"
 Environment=\"AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID\"
 Environment=\"OPENAI_API_KEY=$OPENAI_API_KEY\"
 Environment=\"GEMINI_API_KEYS=$GEMINI_API_KEYS\"
