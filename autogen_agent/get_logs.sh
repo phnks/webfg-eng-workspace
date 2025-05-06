@@ -24,7 +24,17 @@ if [[ ! -f "$log_file" ]]; then
     exit 1
 fi
 
-echo "📄 Last $n log lines from $log_file:"
-tail -n "$n" "$log_file"
+cmd_args=("tail" "-n" "$n")
+message="📄 Last $n log lines from $log_file:"
+
+if [[ -n "$2" && "$2" == "-f" ]]; then
+    message="📄 Tailing last $n log lines from $log_file (Ctrl+C to stop):"
+    cmd_args+=("-f")
+fi
+
+cmd_args+=("$log_file")
+
+echo "$message"
+"${cmd_args[@]}"
 
 exit 0
