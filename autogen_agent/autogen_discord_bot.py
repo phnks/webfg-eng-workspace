@@ -165,6 +165,23 @@ class EnhancedLocalExecutor(LocalCommandLineCodeExecutor):
         # Add any other languages frequently encountered by the agent
     }
 
+    HEARTBEAT_SEC = 10               # how often to print a dot
+    ARG_MAX_SAFETY = 1_500_000
+
+    def _wrap_with_heartbeat(self, script: str) -> str:
+        """
+        Prefix a bash script with a background heartbeat that prints one dot
+        every HEARTBEAT_SEC seconds until the script exits.
+        """
+        return textwrap.dedent(f"""
+            # ---- auto‑heartbeat injected by EnhancedLocalExecutor ----
+            ( while true; do printf '.'; sleep {self.HEARTBEAT_SEC}; done ) &
+            __HB_PID=$!
+            trap 'kill "$__HB_PID" 2>/dev/null' EXIT
+            # ----------------------------------------------------------
+            {script}
+        """)
+
 
     def execute_code_blocks(self, code_blocks: List[CodeBlock]) -> CommandLineCodeResult:
         """Executes code blocks with enhanced logging and unknown language handling."""
@@ -190,11 +207,16 @@ class EnhancedLocalExecutor(LocalCommandLineCodeExecutor):
             # Execute known language block using the parent method for a single block
             # This assumes the parent method can handle a list with one item.
             try:
+                if language in {"bash", "shell", "sh"}:
+                    code = self._wrap_with_heartbeat(code)
                 if language in {"bash", "shell", "sh"} and len(code.encode()) > self.ARG_MAX_SAFETY:
                     _LOG.info("Large bash snippet detected – executing via temp script to avoid ARG_MAX")
                     return _run_large_bash(code, self.work_dir, self.timeout)
                 # We call the super method with a list containing only the current block
-                single_block_result: CommandLineCodeResult = super().execute_code_blocks([block])
+                # single_block_result: CommandLineCodeResult = super().execute_code_blocks([block])
+                single_block_result: CommandLineCodeResult = super().execute_code_blocks(
+                    [CodeBlock(language=block.language, code=code)]
+                )
                 _LOG.debug(f"Execution result (Exit Code {single_block_result.exit_code}):\n---\n{single_block_result.output}\n---")
                 exit_codes.append(single_block_result.exit_code)
                 # Prepend the executed code to the output for the agent
