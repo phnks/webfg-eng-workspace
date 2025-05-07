@@ -1,6 +1,6 @@
 # filename: autogen_discord_bot.py
 from __future__ import annotations
-import asyncio, builtins, logging, os, re, shlex, subprocess, sys, textwrap, getpass, platform
+import asyncio, builtins, logging, os, re, shlex, subprocess, sys, textwrap, getpass, platform, random
 from pathlib import Path
 from typing import List, Dict, Any
 import prompts.system as system_prompt_module
@@ -270,12 +270,37 @@ header = textwrap.dedent(webfg_app_prompt_module.WEBFG_APP_PROMPT()).strip()
 # ---------------------------------------------------------------------------
 # 6) LLM config
 # ---------------------------------------------------------------------------
+def only_assistant_can_end(msg: dict) -> bool:
+    """
+    Return True only when the *assistant* sends TERMINATE or DONE.
+    """
+    return (
+        msg.get("name") == BOT_USER           # assistant’s name
+        and msg.get("content", "").strip().upper() in {"TERMINATE", "DONE"}
+    )
+
+def smart_auto_reply(msg: dict) -> str:
+    """
+    Decide what the user‑proxy should say when the assistant finishes a turn.
+
+    • If the assistant message contains at least one executable code block
+      (```bash …```, ```python …```, etc.) → return "CONTINUE"
+      so the loop proceeds and the executor runs the code.
+
+    • Otherwise the assistant is probably asking a question or needs data
+      → return "TERMINATE" so control goes back to the human.
+    """
+    content = msg.get("content", "")
+    has_code_block = bool(re.search(r"```[\s\S]+?```", content))
+    return "CONTINUE" if has_code_block else "TERMINATE"
+
+
 llm_config = {
     "temperature": 0.7,
     "cache_seed": None,
     "config_list": [{
         "model": "gemini-2.5-flash-preview-04-17" if USE_GEMINI else "gpt-3.5-turbo",
-        "api_key": GEMINI_API_KEYS[0] if USE_GEMINI else OPENAI_API_KEY,
+        "api_key": random.choice(GEMINI_API_KEYS) if USE_GEMINI else OPENAI_API_KEY,
         "api_type": "google" if USE_GEMINI else "openai",
     }],
 }
@@ -288,8 +313,9 @@ user_proxy = autogen.UserProxyAgent(
     name="user_proxy",
     human_input_mode="NEVER",
     max_consecutive_auto_reply=500,
-    default_auto_reply="TERMINATE",
-    is_termination_msg=lambda m: m.get("content", "").strip().upper() in {"TERMINATE", "DONE"},
+    #default_auto_reply=smart_auto_reply, #only works with autogen 0.2.16 or above
+    default_auto_reply='TERMINATE',
+    is_termination_msg=only_assistant_can_end,
     code_execution_config={"executor": executor},
 )
 
@@ -302,7 +328,6 @@ bot = discord.Client(intents=intents)
 
 _channel_locks: Dict[int, asyncio.Lock] = {}
 _current_tasks: Dict[int, asyncio.Task] = {}
-_spawned_pids: set[int] = set()
 
 async def _send_long(ch: discord.abc.Messageable, txt: str):
     for chunk in [txt[i:i+1900] for i in range(0, len(txt), 1900)]:
@@ -319,29 +344,7 @@ def _run(cmd: list[str] | str, **kw):
     return subprocess.check_output(SUDO + cmd, **kw)
 
 # ---------------------------------------------------------------------------
-# 8) background server patterns & spawn helper
-# ---------------------------------------------------------------------------
-_SERVER_PATTERNS = [
-    re.compile(r"python3? -m http\.server \d+", re.I),
-    re.compile(r"flask run\b", re.I),
-    re.compile(r"node \S+\.js\b", re.I),
-    re.compile(r"(npm|pnpm|yarn) (run )?start\b", re.I),
-]
-
-def _spawn_daemon(cmd: str) -> int:
-    proc = subprocess.Popen(
-        SUDO + shlex.split(cmd.split("&")[0].strip()),
-        cwd="/",
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    _spawned_pids.add(proc.pid)
-    _LOG.info("🌐 spawned daemon: %s  (pid %d)", cmd, proc.pid)
-    return proc.pid
-
-# ---------------------------------------------------------------------------
-# 9) slash-commands
+# 8) slash-commands
 # ---------------------------------------------------------------------------
 def _handle_host_cmd(cmd: str, args: List[str]) -> tuple[str, str]:
     if cmd == "status":
@@ -365,7 +368,7 @@ def _handle_host_cmd(cmd: str, args: List[str]) -> tuple[str, str]:
     raise ValueError(cmd)
 
 # ---------------------------------------------------------------------------
-# 10) Result Processing Helper & Main Request Handler
+# 9) Result Processing Helper & Main Request Handler
 # ---------------------------------------------------------------------------
 async def _process_and_send_result(ch: discord.abc.Messageable, chat_result: Any):
     """Processes the chat result and sends the final message to Discord."""
@@ -430,9 +433,6 @@ async def _handle_request(ch: discord.abc.Messageable, content: str):
         except RuntimeError as rt_exc:
             error_message = str(rt_exc)
 
-            # ── NEW: regex for Gemini’s 1 048 576-token hard-limit error ──
-            TOKEN_LIMIT_RE = re.compile(r"input token count \\(\\d+\\) exceeds", re.I)
-
             # A) Gemini “list index out of range” bug (existing branch)
             if "Google GenAI exception occurred" in error_message and "list index out of range" in error_message:
                 _LOG.error(f"Caught specific Gemini API 'list index out of range' error: {rt_exc}. Attempting recovery.")
@@ -470,9 +470,61 @@ async def _handle_request(ch: discord.abc.Messageable, content: str):
                 # End of recovery attempt, return regardless of success/failure of recovery
                 return
 
-            # B) Gemini global-context hard limit – start fresh and retry once
-            elif TOKEN_LIMIT_RE.search(error_message):
-                _LOG.warning("Conversation too long; invoking extra pruning and retrying.")
+            # B) NEW: Handle "API key not valid" error from Gemini
+            elif "Google GenAI exception occurred" in error_message and "API key not valid" in error_message:
+                _LOG.error(f"Caught Gemini API 'API key not valid' error: {rt_exc}. Attempting recovery with a new key.")
+                await ch.send("⚠️ The AI model reported an invalid API key. Attempting automatic recovery with a different key...")
+
+                if USE_GEMINI and GEMINI_API_KEYS:
+                    # Select a new random API key
+                    new_api_key = random.choice(GEMINI_API_KEYS)
+                    
+                    # Update the assistant's llm_config for the retry
+                    if assistant.llm_config.get("config_list") and isinstance(assistant.llm_config["config_list"], list) and assistant.llm_config["config_list"]:
+                        assistant.llm_config["config_list"][0]["api_key"] = new_api_key
+                        _LOG.info(f"Switched to new Gemini API key for retry: ...{new_api_key[-4:] if len(new_api_key) >= 4 else '****'}")
+                    else:
+                        _LOG.error("Cannot update API key: llm_config['config_list'] is missing or invalid.")
+                        await ch.send("⚠️ Internal configuration error: Could not switch API key for retry.")
+                        return # Abort retry
+
+                    recovery_prompt_key_error = (
+                        "The previous attempt failed due to an API key validation error. "
+                        "A new API key has been selected. Please process the original request again.\n"
+                        f"Original request was: {content}"
+                    )
+                    try:
+                        await ch.typing()
+                        _LOG.info("Calling user_proxy.initiate_chat for recovery (invalid key)...")
+                        recovery_chat_result = await loop.run_in_executor(
+                            None,
+                            lambda: user_proxy.initiate_chat(
+                                assistant, # Assistant now has the updated key
+                                message=f"{recovery_prompt_key_error}",
+                                clear_history=False, 
+                            )
+                        )
+                        _LOG.info("Recovery (invalid key) initiate_chat completed.")
+                        await _process_and_send_result(ch, recovery_chat_result)
+                    except asyncio.CancelledError:
+                        _LOG.info("Recovery task (invalid key) cancelled by user.")
+                        await ch.send("🚫 Recovery attempt (invalid key) cancelled.")
+                    except Exception as recovery_exc:
+                        _LOG.error(f"Error during recovery attempt (invalid key): {recovery_exc}", exc_info=True)
+                        await ch.send(f"⚠️ Automatic recovery (invalid key) failed: {recovery_exc}")
+                else:
+                    _LOG.warning("Cannot retry with new Gemini key: Not using Gemini or no API keys available.")
+                    await ch.send("⚠️ Cannot attempt recovery: Gemini not in use or no API keys configured.")
+                return
+
+            # C) Gemini global-context hard limit – start fresh and retry once
+            #    Use a combined regex approach to reliably catch token limit errors.
+            #    Pattern 1: Matches detailed error message like "400 ... input token count (X) exceeds the maximum ... allowed (Y)"
+            #    Pattern 2: Matches general phrase "input token count (X) exceeds"
+            elif (re.search(r"400.*input token count \(\d+\) exceeds the maximum.*allowed \(\d+\)", error_message, re.IGNORECASE | re.DOTALL) or
+                  re.search(r"input token count \(\d+\) exceeds", error_message, re.IGNORECASE)):
+                _LOG.info(f"Token limit error detected, attempting pruning and retry. Error: {error_message}")
+                _LOG.warning("Conversation too long; invoking extra pruning and retrying.") # Existing log
                 await ch.send(
                     "⚠️ The conversation got too large for Gemini. "
                     "I’m pruning the oldest turns (keeping the system prompt) and will try again."
@@ -494,12 +546,12 @@ async def _handle_request(ch: discord.abc.Messageable, content: str):
                 await _process_and_send_result(ch, chat_result)
                 return
 
-            # C) Anything else – bubble up unchanged
+            # D) Anything else – bubble up unchanged (if it's a Google GenAI error not matching above patterns)
             else:
-                _LOG.error(f"Unhandled RuntimeError in handler: {rt_exc}", exc_info=True)
+                _LOG.error(f"Unhandled Google GenAI RuntimeError (did not match specific patterns like list index, API key, or token limit): {rt_exc}", exc_info=True)
                 raise rt_exc
 
-        except Exception as exc: # Catch other unexpected errors
+        except Exception as exc: # Catch other unexpected errors (including re-raised ones)
             error_message = str(exc)
             # Regex pattern for the total context token limit error (e.g., ~1M limit)
             gemini_total_token_error = r"400.*input token count \(\d+\) exceeds the maximum.*allowed \(\d+\)"
@@ -516,7 +568,7 @@ async def _handle_request(ch: discord.abc.Messageable, content: str):
                 await ch.send(f"⚠️ An unexpected internal error occurred: {exc}")
 
 # ---------------------------------------------------------------------------
-# 11) Discord event handlers
+# 10) Discord event handlers
 # ---------------------------------------------------------------------------
 @bot.event
 async def on_ready():
@@ -549,7 +601,7 @@ async def on_message(msg: discord.Message):
     task.add_done_callback(lambda t: _current_tasks.pop(msg.channel.id, None))
 
 # ---------------------------------------------------------------------------
-# 12) run the bot
+# 11) run the bot
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     bot.run(DISCORD_BOT_TOKEN)
