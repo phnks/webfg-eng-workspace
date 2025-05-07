@@ -65,11 +65,15 @@ if not USE_GEMINI and not OPENAI_API_KEY:
 # ---------------------------------------------------------------------------
 # 3) Gemini retry wrapper
 # ---------------------------------------------------------------------------
+MAX_RECOVERY_ATTEMPTS = 3 # Total attempts: 1 initial + (MAX_RECOVERY_ATTEMPTS - 1) retries
+
 if USE_GEMINI:
     from gemini_retry_wrapper import GeminiRetryWrapper
-    import autogen.oai.gemini as _gm
-    _gm.GeminiClient = _gm.Gemini = GeminiRetryWrapper
+    import autogen.oai.gemini as _gm_autogen # Renamed to avoid conflict with _grw
+    _gm_autogen.GeminiClient = _gm_autogen.Gemini = GeminiRetryWrapper
     GeminiRetryWrapper._KEYS = GEMINI_API_KEYS
+    import gemini_retry_wrapper as _grw # Import the module itself as _grw for MAX_TOTAL_TOKENS
+    _LOG.info("✅ GeminiRetryWrapper and _grw module configured.")
 
 # ---------------------------------------------------------------------------
 # 4) Autogen / Discord imports
@@ -398,174 +402,139 @@ async def _process_and_send_result(ch: discord.abc.Messageable, chat_result: Any
          await ch.send("ℹ️ Agent response contained only code blocks (executed, not displayed). Task likely completed.")
 
 
-async def _handle_request(ch: discord.abc.Messageable, content: str):
+async def _handle_request(ch: discord.abc.Messageable, original_content: str):
     lock = _channel_locks.setdefault(ch.id, asyncio.Lock())
     async with lock:
-        # chat_result = None # No longer needed here, defined within try/except scopes
         loop = asyncio.get_running_loop()
+        current_content = original_content
 
-        try:
-            await ch.typing() # Indicate activity
+        for attempt in range(1, MAX_RECOVERY_ATTEMPTS + 1):
+            _LOG.info(f"Attempt {attempt}/{MAX_RECOVERY_ATTEMPTS} for original request: {original_content[:70]}...")
+            if attempt > 1:
+                _LOG.info(f"Retry attempt {attempt} using content: {current_content[:150]}...")
 
-            # --- Initiate Chat ---
-            # The GeminiRetryWrapper handles lower-level API retries.
-            # We catch specific errors here to manage the conversation flow.
-            _LOG.info("Calling user_proxy.initiate_chat...")
-            chat_result = await loop.run_in_executor(
-                None,
-                lambda: user_proxy.initiate_chat(
-                    assistant,
-                    message=content,
-                    clear_history=False, # Keep history for context, wrapper handles pruning
-                )
-            )
-            _LOG.info("Initial initiate_chat completed.")
-
-            # --- Process successful chat_result using helper ---
-            await _process_and_send_result(ch, chat_result)
-
-        # --- Exception Handling ---
-        except asyncio.CancelledError:
-            _LOG.info("Task cancelled by user during initial execution.")
-            await ch.send("🚫 Task cancelled.")
-            # Let the lock release naturally.
-
-        except RuntimeError as rt_exc:
-            error_message = str(rt_exc)
-
-            # A) Gemini “list index out of range” bug (existing branch)
-            if "Google GenAI exception occurred" in error_message and "list index out of range" in error_message:
-                _LOG.error(f"Caught specific Gemini API 'list index out of range' error: {rt_exc}. Attempting recovery.")
-                await ch.send("⚠️ The AI model returned an invalid response. Attempting automatic recovery by restarting interaction...")
-
-                # --- Attempt Recovery ---
-                recovery_prompt = (
-                    "The previous attempt failed due to an internal API error (invalid/empty response structure). "
-                    "Please process the original request again, trying a different approach or simplifying the response structure if possible, "
-                    "while still aiming to fulfill the user's goal.\n"
-                    f"Original request was: {content}" # Re-inject original request for context
-                )
-                try:
-                    await ch.typing()
-                    _LOG.info("Calling user_proxy.initiate_chat for recovery...")
-                    # Use clear_history=True to start fresh for the recovery attempt
-                    recovery_chat_result = await loop.run_in_executor(
-                        None,
-                        lambda: user_proxy.initiate_chat(
-                            assistant,
-                            message=f"{recovery_prompt}",
-                            clear_history=False,
-                        )
-                    )
-                    _LOG.info("Recovery initiate_chat completed.")
-                    # Process the result of the recovery attempt
-                    await _process_and_send_result(ch, recovery_chat_result)
-
-                except asyncio.CancelledError:
-                     _LOG.info("Recovery task cancelled by user.")
-                     await ch.send("🚫 Recovery attempt cancelled.")
-                except Exception as recovery_exc:
-                    _LOG.error(f"Error during recovery attempt: {recovery_exc}", exc_info=True)
-                    await ch.send(f"⚠️ Automatic recovery failed: {recovery_exc}")
-                # End of recovery attempt, return regardless of success/failure of recovery
-                return
-
-            # B) NEW: Handle "API key not valid" error from Gemini
-            elif "Google GenAI exception occurred" in error_message and "API key not valid" in error_message:
-                _LOG.error(f"Caught Gemini API 'API key not valid' error: {rt_exc}. Attempting recovery with a new key.")
-                await ch.send("⚠️ The AI model reported an invalid API key. Attempting automatic recovery with a different key...")
-
-                if USE_GEMINI and GEMINI_API_KEYS:
-                    # Select a new random API key
-                    new_api_key = random.choice(GEMINI_API_KEYS)
-                    
-                    # Update the assistant's llm_config for the retry
-                    if assistant.llm_config.get("config_list") and isinstance(assistant.llm_config["config_list"], list) and assistant.llm_config["config_list"]:
-                        assistant.llm_config["config_list"][0]["api_key"] = new_api_key
-                        _LOG.info(f"Switched to new Gemini API key for retry: ...{new_api_key[-4:] if len(new_api_key) >= 4 else '****'}")
-                    else:
-                        _LOG.error("Cannot update API key: llm_config['config_list'] is missing or invalid.")
-                        await ch.send("⚠️ Internal configuration error: Could not switch API key for retry.")
-                        return # Abort retry
-
-                    recovery_prompt_key_error = (
-                        "The previous attempt failed due to an API key validation error. "
-                        "A new API key has been selected. Please process the original request again.\n"
-                        f"Original request was: {content}"
-                    )
-                    try:
-                        await ch.typing()
-                        _LOG.info("Calling user_proxy.initiate_chat for recovery (invalid key)...")
-                        recovery_chat_result = await loop.run_in_executor(
-                            None,
-                            lambda: user_proxy.initiate_chat(
-                                assistant, # Assistant now has the updated key
-                                message=f"{recovery_prompt_key_error}",
-                                clear_history=False, 
-                            )
-                        )
-                        _LOG.info("Recovery (invalid key) initiate_chat completed.")
-                        await _process_and_send_result(ch, recovery_chat_result)
-                    except asyncio.CancelledError:
-                        _LOG.info("Recovery task (invalid key) cancelled by user.")
-                        await ch.send("🚫 Recovery attempt (invalid key) cancelled.")
-                    except Exception as recovery_exc:
-                        _LOG.error(f"Error during recovery attempt (invalid key): {recovery_exc}", exc_info=True)
-                        await ch.send(f"⚠️ Automatic recovery (invalid key) failed: {recovery_exc}")
-                else:
-                    _LOG.warning("Cannot retry with new Gemini key: Not using Gemini or no API keys available.")
-                    await ch.send("⚠️ Cannot attempt recovery: Gemini not in use or no API keys configured.")
-                return
-
-            # C) Gemini global-context hard limit – start fresh and retry once
-            #    Use a combined regex approach to reliably catch token limit errors.
-            #    Pattern 1: Matches detailed error message like "400 ... input token count (X) exceeds the maximum ... allowed (Y)"
-            #    Pattern 2: Matches general phrase "input token count (X) exceeds"
-            elif (re.search(r"400.*input token count \(\d+\) exceeds the maximum.*allowed \(\d+\)", error_message, re.IGNORECASE | re.DOTALL) or
-                  re.search(r"input token count \(\d+\) exceeds", error_message, re.IGNORECASE)):
-                _LOG.info(f"Token limit error detected, attempting pruning and retry. Error: {error_message}")
-                _LOG.warning("Conversation too long; invoking extra pruning and retrying.") # Existing log
-                await ch.send(
-                    "⚠️ The conversation got too large for Gemini. "
-                    "I’m pruning the oldest turns (keeping the system prompt) and will try again."
-                )
-
-                # Tighten the wrapper’s token budget by 20 % for this retry.
-                import gemini_retry_wrapper as _grw
-                _grw.MAX_TOTAL_TOKENS = max(256_000, int(_grw.MAX_TOTAL_TOKENS * 0.8))
-
+            try:
                 await ch.typing()
+                _LOG.info(f"Calling user_proxy.initiate_chat (attempt {attempt})...")
                 chat_result = await loop.run_in_executor(
                     None,
                     lambda: user_proxy.initiate_chat(
                         assistant,
-                        message=content,       # same prompt
-                        clear_history=False,   # keep recent context
-                    ),
+                        message=current_content,
+                        clear_history=False,
+                    )
                 )
+                _LOG.info(f"Initiate_chat completed successfully on attempt {attempt}.")
                 await _process_and_send_result(ch, chat_result)
-                return
+                return # SUCCESS: Exit function
 
-            # D) Anything else – bubble up unchanged (if it's a Google GenAI error not matching above patterns)
-            else:
-                _LOG.error(f"Unhandled Google GenAI RuntimeError (did not match specific patterns like list index, API key, or token limit): {rt_exc}", exc_info=True)
-                raise rt_exc
+            except asyncio.CancelledError:
+                _LOG.info(f"Task cancelled by user during attempt {attempt}.")
+                await ch.send("🚫 Task cancelled.")
+                return # CANCELLED: Exit function
 
-        except Exception as exc: # Catch other unexpected errors (including re-raised ones)
-            error_message = str(exc)
-            # Regex pattern for the total context token limit error (e.g., ~1M limit)
-            gemini_total_token_error = r"400.*input token count \(\d+\) exceeds the maximum.*allowed \(\d+\)"
+            except RuntimeError as rt_exc:
+                error_message = str(rt_exc)
+                _LOG.warning(f"RuntimeError on attempt {attempt}/{MAX_RECOVERY_ATTEMPTS}: {error_message[:200]}")
 
-            # Check if the error is the Gemini total token limit error
-            if re.search(gemini_total_token_error, error_message, re.IGNORECASE | re.DOTALL):
-                 _LOG.warning(f"Gemini total context token limit error encountered: {error_message}")
-                 await ch.send("⚠️ The conversation history became too long for the AI model (total limit). "
-                               "The request failed for this turn. Please try starting a fresh conversation (e.g., using `/interrupt` then re-prompting).")
-                 # Let the lock release.
-            else:
-                # Handle other, unexpected exceptions
-                _LOG.error(f"Unhandled Exception in handler: {exc}", exc_info=True)
-                await ch.send(f"⚠️ An unexpected internal error occurred: {exc}")
+                if attempt >= MAX_RECOVERY_ATTEMPTS:
+                    _LOG.error(f"Max recovery attempts ({MAX_RECOVERY_ATTEMPTS}) reached. Failing permanently. Last error: {rt_exc}")
+                    await ch.send(f"⚠️ All {MAX_RECOVERY_ATTEMPTS} attempts failed. Last error: {error_message[:500]}")
+                    return # FAILED PERMANENTLY: Exit function
+
+                recovered_for_next_attempt = False
+
+                # A) Gemini “list index out of range”
+                if "Google GenAI exception occurred" in error_message and "list index out of range" in error_message:
+                    _LOG.error(f"Attempt {attempt} (list index out of range). Preparing for retry {attempt + 1}.")
+                    #await ch.send(f"⚠️ AI model error (attempt {attempt}/{MAX_RECOVERY_ATTEMPTS}). Retrying...")
+                    current_content = (
+                        "The previous attempt failed due to an internal API error (invalid/empty response structure). "
+                        "Please process the original request again, trying a different approach or simplifying the response structure if possible, "
+                        "while still aiming to fulfill the user's goal.\n"
+                        f"Original request was: {original_content}"
+                    )
+                    recovered_for_next_attempt = True
+                
+                # B) "API key not valid"
+                elif "Google GenAI exception occurred" in error_message and "API key not valid" in error_message:
+                    _LOG.error(f"Attempt {attempt} (API key not valid). Preparing for retry {attempt + 1}.")
+                    
+                    if USE_GEMINI and GEMINI_API_KEYS:
+                        if len(GEMINI_API_KEYS) <= 1:
+                            _LOG.warning(f"Attempt {attempt}: Only one or zero Gemini API keys configured. Cannot switch to a different key.")
+                            await ch.send(f"⚠️ AI API key error (attempt {attempt}/{MAX_RECOVERY_ATTEMPTS}). Only one key available, cannot switch. This error may persist.")
+                            # Not setting recovered_for_next_attempt = True, so it will fall to unhandled.
+                        else: # More than one key available
+                            #await ch.send(f"⚠️ AI API key error (attempt {attempt}/{MAX_RECOVERY_ATTEMPTS}). Retrying with new key...")
+                            current_api_key_in_config = assistant.llm_config.get("config_list", [{}])[0].get("api_key")
+                            other_keys = [k for k in GEMINI_API_KEYS if k != current_api_key_in_config]
+                            
+                            if not other_keys: 
+                                _LOG.error(f"Logic error in API key selection for attempt {attempt + 1}. No other keys found despite multiple total keys ({len(GEMINI_API_KEYS)} total, current: ...{current_api_key_in_config[-4:]}).")
+                                await ch.send("⚠️ Internal error during API key switch. Cannot retry this way.")
+                            else:
+                                new_api_key = random.choice(other_keys)
+                                if assistant.llm_config.get("config_list") and isinstance(assistant.llm_config["config_list"], list) and assistant.llm_config["config_list"]:
+                                    assistant.llm_config["config_list"][0]["api_key"] = new_api_key
+                                    _LOG.info(f"Switched to new Gemini API key for attempt {attempt + 1}: ...{new_api_key[-4:] if len(new_api_key) >= 4 else '****'}")
+                                    current_content = (
+                                        "The previous attempt failed due to an API key validation error. "
+                                        "A new API key has been selected. Please process the original request again.\n"
+                                        f"Original request was: {original_content}"
+                                    )
+                                    recovered_for_next_attempt = True
+                                else:
+                                    _LOG.error("Cannot update API key for attempt {attempt + 1}: llm_config['config_list'] is missing or invalid.")
+                                    await ch.send("⚠️ Internal configuration error: Could not switch API key for retry.")
+                    else: 
+                        _LOG.warning(f"Attempt {attempt}: Cannot retry with new Gemini key: Not using Gemini or no API keys available.")
+                        await ch.send("⚠️ Cannot attempt API key recovery: Gemini not in use or no API keys configured.")
+
+                # C) Gemini global-context hard limit
+                elif (re.search(r"400.*input token count \(\d+\) exceeds the maximum.*allowed \(\d+\)", error_message, re.IGNORECASE | re.DOTALL) or
+                      re.search(r"input token count \(\d+\) exceeds", error_message, re.IGNORECASE)):
+                    _LOG.info(f"Attempt {attempt} (Token limit error). Preparing for retry {attempt + 1} with pruning.")
+                    
+                    if USE_GEMINI:
+                        #await ch.send(
+                        #    f"⚠️ Conversation too large for Gemini (attempt {attempt}/{MAX_RECOVERY_ATTEMPTS}). "
+                        #    "Pruning and retrying..."
+                        #)
+                        try:
+                            # _grw should be available from top-level import if USE_GEMINI is true
+                            current_max_tokens = getattr(_grw, 'MAX_TOTAL_TOKENS', 1000000) # Default if not set
+                            _grw.MAX_TOTAL_TOKENS = max(256_000, int(current_max_tokens * 0.8))
+                            _LOG.info(f"Tightened Gemini token budget for attempt {attempt + 1}. New MAX_TOTAL_TOKENS: {_grw.MAX_TOTAL_TOKENS}")
+                            current_content = original_content 
+                            recovered_for_next_attempt = True
+                        except NameError: 
+                            _LOG.error("gemini_retry_wrapper module (_grw) not found, though USE_GEMINI is true. Cannot adjust token budget.")
+                            await ch.send("⚠️ Internal error: Could not adjust token budget (module not found).")
+                        except AttributeError:
+                            _LOG.error("gemini_retry_wrapper does not have MAX_TOTAL_TOKENS attribute.")
+                            await ch.send("⚠️ Internal error: Could not adjust token budget (attribute missing).")
+                    else: 
+                        _LOG.warning(f"Attempt {attempt}: Token limit error for non-Gemini model. No specific recovery for this. Error: {error_message[:100]}")
+                        await ch.send(f"⚠️ Conversation too large for AI model. No specific pruning defined for this model.")
+                        # For non-Gemini, no specific recovery, will fall through to D.
+
+                if recovered_for_next_attempt:
+                    _LOG.info(f"Proceeding to attempt {attempt + 1} after applying recovery strategy for: {error_message[:70]}...")
+                    continue # To the next iteration of the for loop
+
+                # D) Unhandled RuntimeError (no specific recovery path taken or path failed internally)
+                _LOG.error(f"Unhandled RuntimeError on attempt {attempt} (no recovery path taken or path failed): {rt_exc}", exc_info=True)
+                await ch.send(f"⚠️ An unhandled AI error occurred on attempt {attempt}: {error_message[:500]}. Stopping retries for this error type.")
+                return # FAILED (unhandled specific error or failed recovery path): Exit function
+
+            except Exception as exc: 
+                _LOG.error(f"Unhandled Exception in handler on attempt {attempt}: {exc}", exc_info=True)
+                await ch.send(f"⚠️ An unexpected internal error occurred (attempt {attempt}): {str(exc)[:500]}")
+                return # FAILED (unexpected general error): Exit function
+        
+        _LOG.error(f"Exited retry loop for {original_content[:50]} without success or explicit failure. This indicates a logic flaw if MAX_RECOVERY_ATTEMPTS > 0.")
+        await ch.send("⚠️ An unexpected issue occurred with the retry logic. Please report this.")
 
 # ---------------------------------------------------------------------------
 # 10) Discord event handlers
