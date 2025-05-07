@@ -303,7 +303,7 @@ llm_config = {
     "temperature": 0.7,
     "cache_seed": None,
     "config_list": [{
-        "model": "gemini-2.5-flash-preview-04-17" if USE_GEMINI else "gpt-3.5-turbo",
+        "model": "gemini-2.5-pro-exp-03-25" if USE_GEMINI else "gpt-3.5-turbo",
         "api_key": random.choice(GEMINI_API_KEYS) if USE_GEMINI else OPENAI_API_KEY,
         "api_type": "google" if USE_GEMINI else "openai",
     }],
