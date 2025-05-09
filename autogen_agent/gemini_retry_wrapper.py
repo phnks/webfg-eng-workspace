@@ -2,7 +2,7 @@
 """
 GeminiRetryWrapper
 ──────────────────
-Works with autogen ≤ 0.2.39 (“Gemini”) **and** ≥ 0.2.40 (“GeminiClient”).
+Works with pyautogen ≤ 0.8**and** ≥ 0.9
 
 Adds
 • exponential‑and‑jitter back‑off for 429 / 5xx
@@ -16,7 +16,7 @@ wrapper is guaranteed to be used.
 """
 
 from __future__ import annotations
-import os, sys, time, random, re, logging, itertools
+import sys, logging, random, time, re, os, itertools
 from importlib import import_module
 from typing import Any, Dict, List
 import tiktoken # Added for token counting
@@ -77,14 +77,28 @@ def _estimate_tokens(messages: List[Dict[str, Any]]) -> int:
 # --- End Tokenizer Setup ---
 
 
-# ── grab the original Gemini class regardless of Autogen version ─────────────
-gemini_mod = import_module("autogen.oai.gemini")
-BaseGemini = (
-    getattr(gemini_mod, "GeminiClient", None)
-    or getattr(gemini_mod, "Gemini", None)
-)
-if BaseGemini is None:  # pragma: no cover
-    raise ImportError("Could not locate Gemini / GeminiClient in Autogen")
+# -------------------------------------------------------------------------
+# Find the Gemini client class regardless of Autogen version
+# -------------------------------------------------------------------------
+_CANDIDATES = [
+    "autogen.provider.google.gemini",   # ≥ 0.9
+    "autogen.oai.gemini",               # ≤ 0.8
+]
+BaseGemini = None
+for path in _CANDIDATES:
+    try:
+        _mod = import_module(path)
+    except ModuleNotFoundError:
+        continue
+    for _name in ("GeminiClient", "Gemini", "GoogleGemini"):
+        BaseGemini = getattr(_mod, _name, None)
+        if BaseGemini:
+            gemini_mod = _mod      # remember which module worked
+            break
+    if BaseGemini:
+        break
+if BaseGemini is None:
+    raise ImportError("❌  Could not locate Gemini client class in Autogen")
 
 # ── helper: parse Google’s explicit retry delay (if present) ─────────────────
 _RE_DELAY = re.compile(r"retry_delay\s*{\s*seconds:\s*(\d+)", re.I)
@@ -152,6 +166,13 @@ class GeminiRetryWrapper(BaseGemini):                    # noqa: N801
 
     # ── main override: retry loop ────────────────────────────────────────────
     def create(self, params: Dict[str, Any]):   # type: ignore[override]
+        # --- Add logging before the call for potential debugging ---
+        _LOG.debug(f"Calling Gemini API with params: {params}") # Keep commented unless debugging
+        # --- disable Automatic Function Calling unless caller overrides ---
+        params.setdefault("automatic_function_calling", {"disable": True})
+        # If you never want SDK‑side tools, make sure an empty list is present
+        params.setdefault("tools", [])
+
         start = time.time()
         attempt = 0
         backoff = self.BASE_BACKOFF
@@ -172,8 +193,7 @@ class GeminiRetryWrapper(BaseGemini):                    # noqa: N801
                 )
 
             try:
-                # --- Add logging before the call for potential debugging ---
-                # _LOG.debug(f"Calling Gemini API with params: {params}") # Keep commented unless debugging
+                # ------------------------------------------------
                 response = super().create(params)
                 # ── NEW: guard against empty responses ────────────────────
                 if response is None:
@@ -268,24 +288,17 @@ class GeminiRetryWrapper(BaseGemini):                    # noqa: N801
                 _estimate_tokens(messages), MAX_TOTAL_TOKENS,
             )
 
-# ── global hot‑patch: swap EVERY stale reference in already‑loaded modules ──
-def _retarget_stale_refs() -> None:
+def _retarget_stale_refs(replacement):
     for mod in list(sys.modules.values()):
         if not mod:
             continue
-        try:
-            if getattr(mod, "GeminiClient", None) is BaseGemini:
-                setattr(mod, "GeminiClient", GeminiRetryWrapper)
-            if getattr(mod, "Gemini", None) is BaseGemini:
-                setattr(mod, "Gemini", GeminiRetryWrapper)
-        except Exception:   # some modules are silly – just skip
-            continue
+        for attr in ("GeminiClient", "Gemini", "GoogleGemini"):
+            if getattr(mod, attr, None) is BaseGemini:
+                setattr(mod, attr, replacement)
 
-_retarget_stale_refs()
-
-# also replace the symbols inside the *defining* module
-setattr(gemini_mod, "GeminiClient", GeminiRetryWrapper)
-setattr(gemini_mod, "Gemini", GeminiRetryWrapper)
+_retarget_stale_refs(GeminiRetryWrapper)          # for already‑imported refs
+for attr in ("GeminiClient", "Gemini", "GoogleGemini"):
+    setattr(gemini_mod, attr, GeminiRetryWrapper) # for future imports
 
 # utility so the Discord bot can surface long‑running failure notices
 def send_discord_system_message(message: str) -> None:  # noqa: D401

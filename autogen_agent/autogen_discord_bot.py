@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 import prompts.system as system_prompt_module
 import prompts.webfgapp as webfg_app_prompt_module
+import autogen
 
 # ── basic setup ──────────────────────────────────────────────────────────────
 builtins.input = lambda *_: ""  # prevent stdin blocking
@@ -62,6 +63,10 @@ if USE_GEMINI and not GEMINI_API_KEYS:
 if not USE_GEMINI and not OPENAI_API_KEY:
     sys.exit("❌ Neither OPENAI_API_KEY nor USE_GEMINI=true provided")
 
+if not AGENT_HOME:
+    sys.exit("❌ AGENT_HOME is not set in the environment (.env) — "
+             "can’t locate tools.sh")
+
 # ---------------------------------------------------------------------------
 # 3) Gemini retry wrapper
 # ---------------------------------------------------------------------------
@@ -72,13 +77,17 @@ if USE_GEMINI:
     import autogen.oai.gemini as _gm_autogen # Renamed to avoid conflict with _grw
     _gm_autogen.GeminiClient = _gm_autogen.Gemini = GeminiRetryWrapper
     GeminiRetryWrapper._KEYS = GEMINI_API_KEYS
+
+    # --- TURN AFC OFF GLOBALLY -------------------------------------------
+    import google.genai._extra_utils as _eu
+    _eu.should_disable_afc = lambda *_a, **_k: True
+
     import gemini_retry_wrapper as _grw # Import the module itself as _grw for MAX_TOTAL_TOKENS
     _LOG.info("✅ GeminiRetryWrapper and _grw module configured.")
 
 # ---------------------------------------------------------------------------
 # 4) Autogen / Discord imports
 # ---------------------------------------------------------------------------
-import autogen
 from autogen.coding import LocalCommandLineCodeExecutor, CodeBlock
 from autogen.coding.base import CommandLineCodeResult # Try importing from base
 import discord
@@ -283,22 +292,6 @@ def only_assistant_can_end(msg: dict) -> bool:
         and msg.get("content", "").strip().upper() in {"TERMINATE", "DONE"}
     )
 
-def smart_auto_reply(msg: dict) -> str:
-    """
-    Decide what the user‑proxy should say when the assistant finishes a turn.
-
-    • If the assistant message contains at least one executable code block
-      (```bash …```, ```python …```, etc.) → return "CONTINUE"
-      so the loop proceeds and the executor runs the code.
-
-    • Otherwise the assistant is probably asking a question or needs data
-      → return "TERMINATE" so control goes back to the human.
-    """
-    content = msg.get("content", "")
-    has_code_block = bool(re.search(r"```[\s\S]+?```", content))
-    return "CONTINUE" if has_code_block else "TERMINATE"
-
-
 llm_config = {
     "temperature": 0.7,
     "cache_seed": None,
@@ -306,22 +299,32 @@ llm_config = {
         "model": "gemini-2.5-pro-exp-03-25" if USE_GEMINI else "gpt-3.5-turbo",
         "api_key": random.choice(GEMINI_API_KEYS) if USE_GEMINI else OPENAI_API_KEY,
         "api_type": "google" if USE_GEMINI else "openai",
-    }],
+    }]
 }
 assistant = autogen.AssistantAgent(
     name=BOT_USER,
     llm_config=llm_config,
-    system_message=base_system_prompt + "\\n\\n" + header
+    system_message=base_system_prompt + "\\n\\n" + header,
 )
+
 user_proxy = autogen.UserProxyAgent(
     name="user_proxy",
     human_input_mode="NEVER",
     max_consecutive_auto_reply=500,
-    #default_auto_reply=smart_auto_reply, #only works with autogen 0.2.16 or above
-    default_auto_reply='TERMINATE',
     is_termination_msg=only_assistant_can_end,
     code_execution_config={"executor": executor},
 )
+
+def _smart_auto_reply(messages, sender, config):
+    """
+    If the last assistant message contains code, tell the proxy
+    to CONTINUE; otherwise stop so the human can answer.
+    """
+    last = messages[-1]
+    has_code = bool(re.search(r"```[\\s\\S]+?```", last.get("content", "")))
+    return "CONTINUE" if has_code else "TERMINATE"
+
+user_proxy.register_reply([assistant], _smart_auto_reply)
 
 # ---------------------------------------------------------------------------
 # 7) Discord glue
