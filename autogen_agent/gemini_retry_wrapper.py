@@ -168,10 +168,6 @@ class GeminiRetryWrapper(BaseGemini):                    # noqa: N801
     def create(self, params: Dict[str, Any]):   # type: ignore[override]
         # --- Add logging before the call for potential debugging ---
         _LOG.debug(f"Calling Gemini API with params: {params}") # Keep commented unless debugging
-        # --- disable Automatic Function Calling unless caller overrides ---
-        params.setdefault("automatic_function_calling", {"disable": True})
-        # If you never want SDK‑side tools, make sure an empty list is present
-        params.setdefault("tools", [])
 
         start = time.time()
         attempt = 0
@@ -193,7 +189,6 @@ class GeminiRetryWrapper(BaseGemini):                    # noqa: N801
                 )
 
             try:
-                # ------------------------------------------------
                 response = super().create(params)
                 # ── NEW: guard against empty responses ────────────────────
                 if response is None:
