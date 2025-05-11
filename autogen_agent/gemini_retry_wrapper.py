@@ -106,8 +106,9 @@ def _extract_retry_delay(msg: str) -> int | None:
     m = _RE_DELAY.search(msg)
     return int(m.group(1)) if m else None
 
+import fast_gemini_patch          # just importing applies the swap
 # ─────────────────────────────────────────────────────────────────────────────
-class GeminiRetryWrapper(BaseGemini):                    # noqa: N801
+class GeminiRetryWrapper(FastGemini):                    # noqa: N801
     """Drop‑in replacement with robust retrying & key cycling."""
 
     # defaults (override from the outside if you like)
@@ -169,6 +170,11 @@ class GeminiRetryWrapper(BaseGemini):                    # noqa: N801
         # --- Add logging before the call for potential debugging ---
         _LOG.debug(f"Calling Gemini API with params: {params}") # Keep commented unless debugging
 
+        params.setdefault("generation_config", {})            # <-- NEW
+        gen_cfg = params["generation_config"]
+        gen_cfg.setdefault("candidate_count", 1)              # 1 → ~8× faster
+
+        t0 = time.perf_counter()
         start = time.time()
         attempt = 0
         backoff = self.BASE_BACKOFF
@@ -190,6 +196,7 @@ class GeminiRetryWrapper(BaseGemini):                    # noqa: N801
 
             try:
                 response = super().create(params)
+                _LOG.info("⏱️  Gemini round‑trip: %.2f s", time.perf_counter() - t0)
                 # ── NEW: guard against empty responses ────────────────────
                 if response is None:
                     raise EmptyApiResponseError(

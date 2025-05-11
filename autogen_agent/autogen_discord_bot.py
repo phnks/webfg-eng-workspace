@@ -1,13 +1,7 @@
 # filename: autogen_discord_bot.py
 from __future__ import annotations
-import asyncio, builtins, logging, os, re, shlex, subprocess, sys, textwrap, getpass, platform, random
-from pathlib import Path
-from typing import List, Dict, Any
-import prompts.system as system_prompt_module
-import prompts.webfgapp as webfg_app_prompt_module
-import autogen
 
-# ── basic setup ──────────────────────────────────────────────────────────────
+import logging, builtins, sys
 builtins.input = lambda *_: ""  # prevent stdin blocking
 logging.basicConfig(
     level=logging.INFO,
@@ -16,6 +10,17 @@ logging.basicConfig(
     stream=sys.stderr,
 )
 _LOG = logging.getLogger("discord-bot")
+
+import google.genai as _sdk          # makes the SDK + the alias appear
+sys.modules["google_genai"] = _sdk   # (defensive if init ever changes)
+import fast_gemini_patch               # prints “✅ Patched …”
+
+import asyncio, time, os, re, shlex, subprocess, textwrap, getpass, platform, random
+from pathlib import Path
+from typing import List, Dict, Any
+import prompts.system as system_prompt_module
+import prompts.webfgapp as webfg_app_prompt_module
+import autogen
 
 from dotenv import load_dotenv; load_dotenv()
 
@@ -72,18 +77,12 @@ if not AGENT_HOME:
 # ---------------------------------------------------------------------------
 MAX_RECOVERY_ATTEMPTS = 3 # Total attempts: 1 initial + (MAX_RECOVERY_ATTEMPTS - 1) retries
 
-if USE_GEMINI:
-    from gemini_retry_wrapper import GeminiRetryWrapper
-    import autogen.oai.gemini as _gm_autogen # Renamed to avoid conflict with _grw
-    _gm_autogen.GeminiClient = _gm_autogen.Gemini = GeminiRetryWrapper
-    GeminiRetryWrapper._KEYS = GEMINI_API_KEYS
+#import autogen.provider.google.genai_client as _ag_gc
+#from gemini_retry_wrapper import GeminiRetryWrapper as _GRW
+#_ag_gc.GeminiClient = _ag_gc.Gemini = _GRW
 
-    # --- TURN AFC OFF GLOBALLY -------------------------------------------
-    import google.genai._extra_utils as _eu
-    _eu.should_disable_afc = lambda *_a, **_k: True
-
-    import gemini_retry_wrapper as _grw # Import the module itself as _grw for MAX_TOTAL_TOKENS
-    _LOG.info("✅ GeminiRetryWrapper and _grw module configured.")
+#if hasattr(_ag_gc, "_client") and isinstance(_ag_gc._client, _ag_gc.GeminiClient):
+#    _ag_gc._client.__class__ = _GRW
 
 # ---------------------------------------------------------------------------
 # 4) Autogen / Discord imports
@@ -298,8 +297,8 @@ llm_config = {
     "config_list": [{
         "model": "gemini-2.5-pro-exp-03-25" if USE_GEMINI else "gpt-3.5-turbo",
         "api_key": random.choice(GEMINI_API_KEYS) if USE_GEMINI else OPENAI_API_KEY,
-        "api_type": "google" if USE_GEMINI else "openai",
-    }]
+        "api_type": "google" if USE_GEMINI else "openai"
+    }],
 }
 assistant = autogen.AssistantAgent(
     name=BOT_USER,
@@ -324,7 +323,13 @@ def _smart_auto_reply(messages, sender, config):
     has_code = bool(re.search(r"```[\\s\\S]+?```", last.get("content", "")))
     return "CONTINUE" if has_code else "TERMINATE"
 
-user_proxy.register_reply([assistant], _smart_auto_reply)
+def _debug_hook(messages, sender, cfg):
+    if sender == assistant:
+        _LOG.debug("🗨️  assistant turn (%d chars)",
+                   len(messages[-1]['content'] or ""))
+    return _smart_auto_reply(messages, sender, cfg)
+
+user_proxy.register_reply([assistant], _debug_hook)
 
 # ---------------------------------------------------------------------------
 # 7) Discord glue
