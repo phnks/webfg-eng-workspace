@@ -32,10 +32,11 @@ else:
 _AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 _AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 _AWS_REGION = os.getenv("AWS_REGION")
+_AWS_DEFAULT_REGION = os.getenv("AWS_DEFAULT_REGION")
 _AWS_ACCOUNT_ID = os.getenv("AWS_ACCOUNT_ID")
 
-if not all([_AWS_ACCESS_KEY_ID, _AWS_SECRET_ACCESS_KEY, _AWS_REGION, _AWS_ACCOUNT_ID]):
-    _LOG.warning("⚠️ AWS environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, AWS_ACCOUNT_ID) not fully set. AWS operations might fail. Ensure they are in the .env file.")
+if not all([_AWS_ACCESS_KEY_ID, _AWS_SECRET_ACCESS_KEY, _AWS_REGION, _AWS_DEFAULT_REGION, _AWS_ACCOUNT_ID]):
+    _LOG.warning("⚠️ AWS environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, AWS_DEFAULT_REGION, AWS_ACCOUNT_ID) not fully set. AWS operations might fail. Ensure they are in the .env file.")
 else:
     _LOG.info("✅ AWS environment variables loaded.")
 
@@ -283,22 +284,6 @@ def only_assistant_can_end(msg: dict) -> bool:
         and msg.get("content", "").strip().upper() in {"TERMINATE", "DONE"}
     )
 
-def smart_auto_reply(msg: dict) -> str:
-    """
-    Decide what the user‑proxy should say when the assistant finishes a turn.
-
-    • If the assistant message contains at least one executable code block
-      (```bash …```, ```python …```, etc.) → return "CONTINUE"
-      so the loop proceeds and the executor runs the code.
-
-    • Otherwise the assistant is probably asking a question or needs data
-      → return "TERMINATE" so control goes back to the human.
-    """
-    content = msg.get("content", "")
-    has_code_block = bool(re.search(r"```[\s\S]+?```", content))
-    return "CONTINUE" if has_code_block else "TERMINATE"
-
-
 llm_config = {
     "temperature": 0.7,
     "cache_seed": None,
@@ -317,7 +302,6 @@ user_proxy = autogen.UserProxyAgent(
     name="user_proxy",
     human_input_mode="NEVER",
     max_consecutive_auto_reply=500,
-    #default_auto_reply=smart_auto_reply, #only works with autogen 0.2.16 or above
     default_auto_reply='TERMINATE',
     is_termination_msg=only_assistant_can_end,
     code_execution_config={"executor": executor},
