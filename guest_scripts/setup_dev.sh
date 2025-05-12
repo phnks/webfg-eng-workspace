@@ -20,6 +20,17 @@ export DEBIAN_FRONTEND=noninteractive
 echo ">>> Updating package lists..."
 apt-get update -y
 
+# ------------------------------------------------------------------
+# Prefer IPv4 over IPv6 for outbound connections
+# (avoids 5‑minute IPv6 SYN time‑outs when LAN/router has no IPv6)
+# ------------------------------------------------------------------
+if ! grep -q 'precedence ::ffff:0:0/96  100' /etc/gai.conf 2>/dev/null; then
+  echo ">>> Forcing IPv4 precedence in /etc/gai.conf ..."
+  echo 'precedence ::ffff:0:0/96  100' >> /etc/gai.conf
+else
+  echo ">>> IPv4 precedence already present in /etc/gai.conf"
+fi
+
 echo ">>> Installing Xubuntu Desktop Environment..."
 # Install the core Xubuntu desktop and LightDM display manager
 # Use --no-install-recommends to keep it slightly leaner if desired, but full install is safer for compatibility
