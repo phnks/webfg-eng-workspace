@@ -279,86 +279,8 @@ header = textwrap.dedent(webfg_app_prompt_module.WEBFG_APP_PROMPT()).strip()
 # --- NEW MCP imports --------------------------------------------------------
 from autogen_ext.tools.mcp import (
     mcp_server_tools,
-    StdioServerParams,      # use this if you start the server with npx
-    SseServerParams,    # use this if you run the docker image
+    StdioServerParams,
 )
-
-# ---------------------------------------------------------------------------
-# 0‑bis)  spin‑up the Puppeteer MCP container (once)                         │
-# ---------------------------------------------------------------------------
-def _free(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        return s.connect_ex(("127.0.0.1", port)) != 0
-
-def _launch_puppeteer_container() -> None:
-    """
-    Pulls and runs `mcp/puppeteer` unless it is already running
-    or the user opted‑out via $PUPPETEER_MCP=external.
-    """
-    if os.getenv("PUPPETEER_MCP", "").lower() == "external":
-        _LOG.info("🔌 Skipping auto‑start of Puppeteer MCP (PUPPETEER_MCP=external).")
-        return
-
-    # container already listening?
-    if not _free(49765):
-        _LOG.info("💡 Puppeteer MCP already reachable on port 49765.")
-        return
-
-    try:
-        cli = docker.from_env()
-        _LOG.info("📦 Pulling & starting mcp/puppeteer …")
-        c = cli.containers.run(
-            "mcp/puppeteer",
-            detach=True,
-            init=True,
-            ports={"49765/tcp": 49765},
-            shm_size="2g",
-            auto_remove=True,
-            name=f"autogen-puppeteer-{os.getpid()}",
-            environment={"DOCKER_CONTAINER": "true"},
-        )
-
-        try:
-            start_deadline = time.time() + 5
-            while time.time() < start_deadline and c.status != "exited":
-                time.sleep(0.3)
-                c.reload()
-            if c.status == "exited":
-                _LOG.error("🐳 Puppeteer container exited early:")
-                _LOG.error(c.logs(tail=50).decode())
-        except docker.errors.APIError as e:
-            _LOG.warning(f"Could not fetch container logs: {e}")
-
-        # make sure we tidy up on shutdown
-        atexit.register(lambda: c.stop(timeout=5))
-
-        import requests, urllib3
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-        for _ in range(60):           # try for up to 30 s (60 × 0.5 s)
-            try:
-                r = requests.get(
-                    "http://127.0.0.1:49765/openapi.json",
-                    timeout=1,
-                    verify=False,
-                )
-                if r.status_code == 200:
-                    _LOG.info("✅ Puppeteer MCP HTTP API is ready.")
-                    break
-            except requests.exceptions.RequestException:
-                pass
-            time.sleep(0.5)
-        else:
-            raise RuntimeError("Puppeteer MCP failed to become ready in 30 s.")
-
-        return
-
-    except DockerException as e:
-        _LOG.error(f"⚠️  Could not start Puppeteer MCP container: {e}")
-        raise
-
-# kick it off as early as possible
-_launch_puppeteer_container()
 
 # ---------------------------------------------------------------------------
 # 6) LLM config
@@ -372,8 +294,17 @@ def only_assistant_can_end(msg: dict) -> bool:
         and msg.get("content", "").strip().upper() in {"TERMINATE", "DONE"}
     )
 
-# --- NEW: bring the Puppeteer tools in ---
-puppeteer_server = SseServerParams(url="http://127.0.0.1:49765")
+# --- Puppeteer MCP server (STDIO via docker run -i) ---
+puppeteer_server = StdioServerParams(
+    command="docker",
+    args=[
+        "run", "-i", "--rm", "--init",
+        "--security-opt", "seccomp=unconfined",    # avoids sandbox complain
+        "mcp/puppeteer",
+        "--type", "stdio",
+        "--no-sandbox",
+    ],
+)
 
 # fetch tool schemas from the server (sync helper)
 loop = asyncio.new_event_loop()

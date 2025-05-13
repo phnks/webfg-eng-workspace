@@ -407,12 +407,14 @@ EOF
         # Run git config commands as the user
         # Ensure GIT_USERNAME and GIT_TOKEN are available for the subshell
         # We need to pass the values explicitly to the sudo subshell
-        sudo -i -u "$USERNAME" GIT_USERNAME_VAL="$GIT_USERNAME" GIT_TOKEN_VAL="$GIT_TOKEN" bash -c ' \
-            git config --global credential.helper "store --file ~/.git-credentials" && \
-            git config --global user.email "$USER@email.com" && \
-            git config --global user.name "$USER" && \
-            echo "https://\${GIT_USERNAME_VAL}:\${GIT_TOKEN_VAL}@github.com" > ~/.git-credentials && \
-            chmod 600 ~/.git-credentials \
+        sudo -iu "$USERNAME" bash -lc '
+            set -e
+            git config --global credential.helper "store --file ~/.git-credentials"
+            git config --global user.email "$(whoami)@example.com"
+            git config --global user.name  "$(whoami)"
+            printf "https://%s:%s@github.com\n" "$GIT_USERNAME_VAL" "$GIT_TOKEN_VAL" \
+                    > ~/.git-credentials
+            chmod 600 ~/.git-credentials
         ' || echo "Warning: Failed to configure git credentials for $USERNAME."
         echo "Git credentials configured."
         # --- End Git Credential Config ---
