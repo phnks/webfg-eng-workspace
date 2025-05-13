@@ -21,17 +21,19 @@ from importlib import import_module
 from typing import Any, Dict, List
 import tiktoken # Added for token counting
 
+import google.generativeai as genai
+from google.generativeai import GenerativeModel            # already a transitive dep
+import uuid                                                # for fresh quota_user
+
 # ── basic logging ────────────────────────────────────────────────────────────
 _LOG = logging.getLogger("GeminiRetryWrapper")
 _LOG.setLevel(logging.INFO)          # change to DEBUG for very chatty output
-
 
 # --- Custom Exception ---
 class EmptyApiResponseError(Exception):
     """Raised when the Gemini API returns a response without expected content (e.g., no candidates)."""
     pass
 # --- End Custom Exception ---
-
 
 # ── token limits ───────────────────────────────────────────────────────────
 # Gemini’s absolute cap is 1 048 576 tokens.  We keep a small safety margin
@@ -106,6 +108,43 @@ class GeminiRetryWrapper(BaseGemini):                    # noqa: N801
     _KEYS: List[str] = []
     _key_cycle = None
 
+    # 1) helper that really nukes the transport
+    def _hard_reset_client(self) -> None:
+        """Close stale HTTP/2 session and rebuild GenerativeModel."""
+        # 1) close old socket (if any)
+        try:
+            old = getattr(self, "client", None) or getattr(self, "_client", None)
+            if old and hasattr(old, "_transport"):
+                old._transport.session.close()
+        except Exception as e:
+            _LOG.debug("could not close old session: %s", e)
+
+        # 2) work out which model we were using
+        model_name = (
+            getattr(self, "_orig_model_name", None)
+            or getattr(old, "model_name", None)
+            or getattr(old, "model", None)
+            or getattr(self, "model_name", None)
+            or getattr(self, "_model", None)
+        )
+
+        # 3) configure key globally (makes GenAI lib happy)
+        try:
+            genai.configure(
+                api_key=self.api_key,
+                default_headers={"x-goog-quota-user": uuid.uuid4().hex[:32]},
+            )
+        except Exception as e:
+            _LOG.debug("genai.configure failed: %s", e)
+
+        # 4) build fresh GenerativeModel → new HTTP/2 session
+        self.client = GenerativeModel(model_name=model_name)
+
+        if hasattr(self, "_client"):        # for ≤ 0.2.39
+            self._client = self.client
+
+        _LOG.info("♻️  rebuilt GenerativeModel for %s, new HTTP session", model_name)
+
     # ── life‑cycle ───────────────────────────────────────────────────────────
     def __init__(self, *args: Any, **kw: Any):
         """
@@ -113,6 +152,18 @@ class GeminiRetryWrapper(BaseGemini):                    # noqa: N801
         The passed‑in `api_key` is ignored – keys are injected automatically.
         """
         super().__init__(*args, **kw)
+
+        # ── remember the model name exactly once ────────────────────────
+        self._orig_model_name = (
+            kw.get("model")                      # autogen ≤ 0.2.39
+            or kw.get("model_name")              # autogen ≥ 0.2.40
+            or getattr(self, "model_name", None) # sometimes already set by BaseGemini
+            or getattr(self, "_model", None)     # legacy
+        )
+        if not self._orig_model_name:
+            _LOG.warning(
+                "Could not detect original model name – "
+            )
 
         # initialise key‑pool once
         if not GeminiRetryWrapper._KEYS:
@@ -135,12 +186,24 @@ class GeminiRetryWrapper(BaseGemini):                    # noqa: N801
 
     # ── helpers ──────────────────────────────────────────────────────────────
     def _switch_key(self, key: str) -> None:
-        """Hot‑swap the API key inside both wrapper *and* underlying client."""
+        """Hot‑swap the API key inside the wrapper *and* globally."""
         self.api_key = key
-        if hasattr(self, "client"):      # autogen ≥ 0.2.40
-            self.client.api_key = key
-        elif hasattr(self, "_client"):   # autogen ≤ 0.2.39
-            self._client.api_key = key
+
+        # Google client uses global config
+        try:
+            genai.configure(api_key=key)
+        except Exception as e:
+            _LOG.debug("genai.configure failed: %s", e)
+
+        # keep compatibility with old Autogen fields (harmless if attr missing)
+        for attr in ("client", "_client"):
+            c = getattr(self, attr, None)
+            if c is not None:
+                try:
+                    setattr(c, "api_key", key)
+                except Exception:
+                    pass
+
         _LOG.info("🔑  using Gemini key ****%s", key[-4:])
     
     # --- override cost to survive models that omit cost -------------------
@@ -212,6 +275,11 @@ class GeminiRetryWrapper(BaseGemini):                    # noqa: N801
                 if not is_http_retriable:
                     _LOG.error(f"❌ Non-retriable error encountered: {exc}", exc_info=True)
                     raise exc # Re-raise non-retriable errors immediately
+
+                if is_http_retriable:
+                    if failures_on_key >= 2:            # two consecutive 429/5xx ⇒ hard reset
+                        self._hard_reset_client()
+                        failures_on_key = 0             # we’re effectively on a new socket
 
                 # --- Retry logic for HTTP 429/5xx errors ---
                 attempt += 1
