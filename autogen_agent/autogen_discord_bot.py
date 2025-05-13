@@ -1,6 +1,10 @@
 # filename: autogen_discord_bot.py
 from __future__ import annotations
 import asyncio, builtins, logging, os, re, shlex, subprocess, sys, textwrap, getpass, platform, random
+# ── NEW: docker‑helper for auto‑booting Puppeteer MCP ────────────────────────
+import atexit, time, socket
+import docker
+from docker.errors import DockerException
 from pathlib import Path
 from typing import List, Dict, Any
 import prompts.system as system_prompt_module
@@ -272,6 +276,79 @@ _LOG.info("✅ Loaded system prompt with, BOT_USER=" + BOT_USER + " HOME_DIR=" +
 
 header = textwrap.dedent(webfg_app_prompt_module.WEBFG_APP_PROMPT()).strip()
 
+# --- NEW MCP imports --------------------------------------------------------
+from autogen_ext.tools.mcp import (
+    mcp_server_tools,
+    StdioServerParams,      # use this if you start the server with npx
+    SseServerParams,    # use this if you run the docker image
+)
+
+# ---------------------------------------------------------------------------
+# 0‑bis)  spin‑up the Puppeteer MCP container (once)                         │
+# ---------------------------------------------------------------------------
+def _free(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("127.0.0.1", port)) != 0
+
+def _launch_puppeteer_container() -> None:
+    """
+    Pulls and runs `mcp/puppeteer` unless it is already running
+    or the user opted‑out via $PUPPETEER_MCP=external.
+    """
+    if os.getenv("PUPPETEER_MCP", "").lower() == "external":
+        _LOG.info("🔌 Skipping auto‑start of Puppeteer MCP (PUPPETEER_MCP=external).")
+        return
+
+    # container already listening?
+    if not _free(49765):
+        _LOG.info("💡 Puppeteer MCP already reachable on port 49765.")
+        return
+
+    try:
+        cli = docker.from_env()
+        _LOG.info("📦 Pulling & starting mcp/puppeteer …")
+        c = cli.containers.run(
+            "mcp/puppeteer",
+            detach=True,
+            init=True,
+            ports={"49765/tcp": 49765},
+            shm_size="2g",
+            auto_remove=True,
+            name=f"autogen-puppeteer-{os.getpid()}",
+            environment={"DOCKER_CONTAINER": "true"},
+        )
+
+        # make sure we tidy up on shutdown
+        atexit.register(lambda: c.stop(timeout=5))
+
+        import requests, urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+        for _ in range(60):           # try for up to 30 s (60 × 0.5 s)
+            try:
+                r = requests.get(
+                    "http://127.0.0.1:49765/openapi.json",
+                    timeout=1,
+                    verify=False,
+                )
+                if r.status_code == 200:
+                    _LOG.info("✅ Puppeteer MCP HTTP API is ready.")
+                    break
+            except requests.exceptions.RequestException:
+                pass
+            time.sleep(0.5)
+        else:
+            raise RuntimeError("Puppeteer MCP failed to become ready in 30 s.")
+
+        return
+
+    except DockerException as e:
+        _LOG.error(f"⚠️  Could not start Puppeteer MCP container: {e}")
+        raise
+
+# kick it off as early as possible
+_launch_puppeteer_container()
+
 # ---------------------------------------------------------------------------
 # 6) LLM config
 # ---------------------------------------------------------------------------
@@ -283,6 +360,15 @@ def only_assistant_can_end(msg: dict) -> bool:
         msg.get("name") == BOT_USER           # assistant’s name
         and msg.get("content", "").strip().upper() in {"TERMINATE", "DONE"}
     )
+
+# --- NEW: bring the Puppeteer tools in ---
+puppeteer_server = SseServerParams(url="http://127.0.0.1:49765")
+
+# fetch tool schemas from the server (sync helper)
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+puppeteer_tools = loop.run_until_complete(mcp_server_tools(puppeteer_server))
+# ---------------------------------------------------------------------------
 
 llm_config = {
     "temperature": 0.7,
@@ -296,7 +382,15 @@ llm_config = {
 assistant = autogen.AssistantAgent(
     name=BOT_USER,
     llm_config=llm_config,
-    system_message=base_system_prompt + "\\n\\n" + header
+    system_message=base_system_prompt
+        + "\\n\\n"
+        + header
+        + "\\n\\n"
+        + "### Browser Automation Tools\n"
+        + "You can call Puppeteer tools (navigate, click, fill, screenshot, "
+        + "evaluate JS) to smoke‑test the web UI after modifying code.",
+    tools=puppeteer_tools,           # ← NEW
+    reflect_on_tool_use=True,        # ← helps the model notice tool failures
 )
 user_proxy = autogen.UserProxyAgent(
     name="user_proxy",
