@@ -299,11 +299,17 @@ puppeteer_server = StdioServerParams(
     command="docker",
     args=[
         "run", "-i", "--rm", "--init",
-        "--security-opt", "seccomp=unconfined",    # avoids sandbox complain
+        "--security-opt", "seccomp=unconfined",    # avoid sandbox complain
+        # (optional) use the host's /dev/shm so Chrome has enough shared‑mem
+        "--shm-size", "1g",
         "mcp/puppeteer",
         "--type", "stdio",
         "--no-sandbox",
     ],
+
+    # give the very first “handshake” plenty of head‑room
+    request_timeout = 30.0,    # seconds (default is 5.0)
+    start_timeout   = 30.0,    # seconds for the container to become ready
 )
 
 # fetch tool schemas from the server (sync helper)
