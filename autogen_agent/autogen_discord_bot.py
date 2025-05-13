@@ -318,6 +318,17 @@ def _launch_puppeteer_container() -> None:
             environment={"DOCKER_CONTAINER": "true"},
         )
 
+        try:
+            start_deadline = time.time() + 5
+            while time.time() < start_deadline and c.status != "exited":
+                time.sleep(0.3)
+                c.reload()
+            if c.status == "exited":
+                _LOG.error("🐳 Puppeteer container exited early:")
+                _LOG.error(c.logs(tail=50).decode())
+        except docker.errors.APIError as e:
+            _LOG.warning(f"Could not fetch container logs: {e}")
+
         # make sure we tidy up on shutdown
         atexit.register(lambda: c.stop(timeout=5))
 
