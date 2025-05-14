@@ -306,7 +306,6 @@ puppeteer_server = StdioServerParams(
         "--type", "stdio",
         "--no-sandbox",
     ],
-
     # give the very first “handshake” plenty of head‑room
     request_timeout = 30.0,    # seconds (default is 5.0)
     start_timeout   = 30.0,    # seconds for the container to become ready
@@ -337,9 +336,11 @@ assistant = autogen.AssistantAgent(
         + "### Browser Automation Tools\n"
         + "You can call Puppeteer tools (navigate, click, fill, screenshot, "
         + "evaluate JS) to smoke‑test the web UI after modifying code.",
-    tools=puppeteer_tools,           # ← NEW
     reflect_on_tool_use=True,        # ← helps the model notice tool failures
 )
+
+assistant.register_tools(puppeteer_tools)
+
 user_proxy = autogen.UserProxyAgent(
     name="user_proxy",
     human_input_mode="NEVER",
