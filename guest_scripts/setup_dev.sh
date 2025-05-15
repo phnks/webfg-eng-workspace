@@ -44,6 +44,46 @@ echo ">>> Installing common development tools and dependencies..."
 # Add unzip for AWS CLI, python3 and pip for SAM CLI
 apt-get install -y git vim curl build-essential net-tools openssh-server wget gpg apt-transport-https unzip python3 python3-pip
 
+# ------------------------------------------------------------------
+# Install & enable Docker Engine (used by the Puppeteer MCP server)
+# ------------------------------------------------------------------
+echo ">>> Checking/Installing Docker Engine..."
+
+if ! command -v docker &>/dev/null; then
+  echo ">>> Docker not found – installing..."
+  # 1. add Docker’s GPG key & repo
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+       | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  chmod a+r /etc/apt/keyrings/docker.gpg
+  codename=$(lsb_release -cs)
+  printf \
+    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+     https://download.docker.com/linux/ubuntu %s stable\n" "$codename" \
+     | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+  # 2. install engine + compose plugin
+  apt-get update -y
+  apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+else
+  echo "Docker already present: $(docker --version)"
+fi
+
+# 3. start & enable service
+systemctl enable --now docker
+
+# 4. add DEV_USER to docker group for password‑less use
+if id "$USERNAME" &>/dev/null; then
+  usermod -aG docker "$USERNAME"
+  echo "User $USERNAME added to docker group."
+fi
+
+# 5. warm‑up pull (optional – comment out to skip)
+echo ">>> Prefetching mcp/puppeteer image (so first run is instant)…"
+docker pull --quiet mcp/puppeteer || echo "Warning: image pre‑pull failed."
+
+echo "Docker installation/config complete."
+
 # --- Install GitHub CLI (gh) ---
 echo ">>> Installing GitHub CLI..."
 # Add GH CLI key and repository (following official instructions)
@@ -367,12 +407,14 @@ EOF
         # Run git config commands as the user
         # Ensure GIT_USERNAME and GIT_TOKEN are available for the subshell
         # We need to pass the values explicitly to the sudo subshell
-        sudo -i -u "$USERNAME" GIT_USERNAME_VAL="$GIT_USERNAME" GIT_TOKEN_VAL="$GIT_TOKEN" bash -c ' \
-            git config --global credential.helper "store --file ~/.git-credentials" && \
-            git config --global user.email "$USER@email.com" && \
-            git config --global user.name "$USER" && \
-            echo "https://\${GIT_USERNAME_VAL}:\${GIT_TOKEN_VAL}@github.com" > ~/.git-credentials && \
-            chmod 600 ~/.git-credentials \
+        sudo -iu "$USERNAME" bash -lc '
+            set -e
+            git config --global credential.helper "store --file ~/.git-credentials"
+            git config --global user.email "$(whoami)@example.com"
+            git config --global user.name  "$(whoami)"
+            printf "https://%s:%s@github.com\n" "$GIT_USERNAME_VAL" "$GIT_TOKEN_VAL" \
+                    > ~/.git-credentials
+            chmod 600 ~/.git-credentials
         ' || echo "Warning: Failed to configure git credentials for $USERNAME."
         echo "Git credentials configured."
         # --- End Git Credential Config ---

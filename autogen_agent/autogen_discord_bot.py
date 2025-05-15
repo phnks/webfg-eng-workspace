@@ -1,6 +1,10 @@
 # filename: autogen_discord_bot.py
 from __future__ import annotations
 import asyncio, builtins, logging, os, re, shlex, subprocess, sys, textwrap, getpass, platform, random
+# ── NEW: docker‑helper for auto‑booting Puppeteer MCP ────────────────────────
+import atexit, time, socket
+import docker
+from docker.errors import DockerException
 from pathlib import Path
 from typing import List, Dict, Any
 import prompts.system as system_prompt_module
@@ -272,6 +276,12 @@ _LOG.info("✅ Loaded system prompt with, BOT_USER=" + BOT_USER + " HOME_DIR=" +
 
 header = textwrap.dedent(webfg_app_prompt_module.WEBFG_APP_PROMPT()).strip()
 
+# --- NEW MCP imports --------------------------------------------------------
+from autogen_ext.tools.mcp import (
+    mcp_server_tools,
+    StdioServerParams,
+)
+
 # ---------------------------------------------------------------------------
 # 6) LLM config
 # ---------------------------------------------------------------------------
@@ -283,6 +293,29 @@ def only_assistant_can_end(msg: dict) -> bool:
         msg.get("name") == BOT_USER           # assistant’s name
         and msg.get("content", "").strip().upper() in {"TERMINATE", "DONE"}
     )
+
+# --- Puppeteer MCP server (STDIO via docker run -i) ---
+puppeteer_server = StdioServerParams(
+    command="docker",
+    args=[
+        "run", "-i", "--rm", "--init",
+        "--security-opt", "seccomp=unconfined",    # avoid sandbox complain
+        # (optional) use the host's /dev/shm so Chrome has enough shared‑mem
+        "--shm-size", "1g",
+        "mcp/puppeteer",
+        "--type", "stdio",
+        "--no-sandbox",
+    ],
+    # give the very first “handshake” plenty of head‑room
+    request_timeout = 30.0,    # seconds (default is 5.0)
+    start_timeout   = 30.0,    # seconds for the container to become ready
+)
+
+# fetch tool schemas from the server (sync helper)
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+puppeteer_tools = loop.run_until_complete(mcp_server_tools(puppeteer_server))
+# ---------------------------------------------------------------------------
 
 llm_config = {
     "temperature": 0.7,
@@ -296,8 +329,18 @@ llm_config = {
 assistant = autogen.AssistantAgent(
     name=BOT_USER,
     llm_config=llm_config,
-    system_message=base_system_prompt + "\\n\\n" + header
+    system_message=base_system_prompt
+        + "\\n\\n"
+        + header
+        + "\\n\\n"
+        + "### Browser Automation Tools\n"
+        + "You can call Puppeteer tools (navigate, click, fill, screenshot, "
+        + "evaluate JS) to smoke‑test the web UI after modifying code.",
+    reflect_on_tool_use=True,        # ← helps the model notice tool failures
 )
+
+assistant.register_tools(puppeteer_tools)
+
 user_proxy = autogen.UserProxyAgent(
     name="user_proxy",
     human_input_mode="NEVER",
