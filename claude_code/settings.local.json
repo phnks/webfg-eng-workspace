@@ -1,0 +1,45 @@
+{
+  "permissions": {
+    "allow": [
+      "Edit",
+      "Write",
+      "Replace",
+      "Create",
+      "Read",
+      "Bash",
+      "WebFetch",
+      "Bash(true)",
+      "Bash(npm:*)",
+      "Bash(git:*)",
+      "Bash(gh:*)",
+      "Bash(ls:*)",
+      "Bash(awk:*)",
+      "Bash(sed:*)",
+      "Bash(grep:*)",
+      "Bash(rm:*)",
+      "Bash(aws:*)",
+      "WebFetch(domain:*.phnks.com)",
+      "Bash(node:*)",
+      "Bash(chmod:*)",
+      "Bash(find:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(gh pr list:*)",
+      "Bash(npm run deploy:qa:*)",
+      "Bash(npm run check-deploy:qa:*)",
+      "Bash(gh pr edit:*)",
+      "Bash(aws cloudformation describe-stacks:*)"
+    ]
+  },
+  "mcpServers": {
+    "discord": {
+      "command": "node",
+      "args": ["/home/devuser/discord-mcp/dist/index.js"],
+      "env": { "DISCORD_BOT_TOKEN": "YOUR_TOKEN_HERE" }
+    }
+  },
+  "sampling": {
+    "autoApproveServers": ["discord"]
+  }
+}
