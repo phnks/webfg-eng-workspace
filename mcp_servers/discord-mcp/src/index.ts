@@ -3,9 +3,6 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CreateMessageResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { Client, GatewayIntentBits, Message } from 'discord.js';
-import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
-
-let client: McpClient;          // <- declare once so every function sees it
 
 const discordClient = new Client({
   intents: [
@@ -57,12 +54,9 @@ const serverTransport = new StdioServerTransport(process.stdin, process.stdout);
 
 async function initializeServer() {
   try {
-    // after rpc.connect(...)
     await rpc.connect(serverTransport);
 
-    client = new McpClient({ name: "discord-mcp-ts-client", version: "1.0.0" });
-    await client.connect(serverTransport);          // share the same transport
-    console.error("MCP Server + Client connected.");
+    console.error("MCP Server connected.");
   } catch (error) {
     console.error('Failed to connect or start MCP transport:', error);
     process.exit(1);
@@ -123,15 +117,12 @@ discordClient.on('messageCreate', async (msg: Message) => {
       maxTokens: 400,
     };
 
-    // Corrected rpc.request call
-    const response = await client.request(
-          { method: "sampling/createMessage", params: requestParams },
-          CreateMessageResultSchema
+    const response = await rpc.server.request(
+      { method: "sampling/createMessage", params: requestParams },
+      CreateMessageResultSchema
     );
 
-    // 'response' is now typed as SamplingResult (which is z.infer<typeof CreateMessageResultSchema>)
-    // This type directly represents the 'result' field of an MCP response.
-    const result = response as ExpectedSamplingResult; // Cast to our more specific expected structure for content
+    const result = response as ExpectedSamplingResult;
 
     if (result && result.content && typeof result.content.text === 'string') {
       await msg.reply(result.content.text);
