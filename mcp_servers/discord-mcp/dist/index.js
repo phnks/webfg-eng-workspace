@@ -41,37 +41,30 @@ async function initializeServer() {
     }
 }
 // ---------- “pull” tool: Claude ➜ Discord ----------
-rpc.tool(
-/* 1️⃣  full tool ID (namespace + name) */
-"discord_send-message", 
-/* 2️⃣  parameter SHAPE (not z.object) */
-{
-    channel: zod_1.z.string().describe("Discord channel ID"),
-    message: zod_1.z.string().describe("Plain-text body")
-}, 
-/* 3️⃣  result SHAPE */
-{
-    success: zod_1.z.boolean(),
-    error: zod_1.z.string().optional()
-}, 
-/* 4️⃣  implementation */
-async (args) => {
-    const { channel, message } = args;
+/* ---- registration ---- */
+rpc.tool("discord_send_message", {
+    channel: zod_1.z.string(),
+    message: zod_1.z.string()
+}, // params shape
+async ({ channel, message }) => {
     try {
-        const ch = await discordClient.channels.fetch(channel);
-        if (ch?.isTextBased()) {
+        console.error("discord_send_message called:", channel, message); // <— visible in MCP stderr
+        // 1) guild / thread / cached DM
+        const ch = await discordClient.channels.fetch(channel).catch(() => null);
+        if (ch && ch.isTextBased()) {
             await ch.send(message);
             return { structuredContent: { success: true } };
         }
-        return {
-            structuredContent: { success: false },
-            error: "Channel is not text-based"
-        };
+        // 2) treat as USER ID → DM
+        const user = await discordClient.users.fetch(channel);
+        const dm = await user.createDM();
+        await dm.send(message);
+        return { structuredContent: { success: true } };
     }
     catch (err) {
+        console.error("discord_send_message error:", err); // <— visible in MCP stderr
         return {
-            structuredContent: { success: false },
-            error: err.message
+            structuredContent: { success: false, error: err.message }
         };
     }
 });

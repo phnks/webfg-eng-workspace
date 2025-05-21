@@ -64,42 +64,36 @@ async function initializeServer() {
 }
 
 // ---------- “pull” tool: Claude ➜ Discord ----------
+/* ---- registration ---- */
 rpc.tool(
-  /* 1️⃣  full tool ID (namespace + name) */
-  "discord_send-message",
-
-  /* 2️⃣  parameter SHAPE (not z.object) */
+  "discord_send_message",
   {
-    channel: z.string().describe("Discord channel ID"),
-    message: z.string().describe("Plain-text body")
-  },
-
-  /* 3️⃣  result SHAPE */
-  {
-    success: z.boolean(),
-    error: z.string().optional()
-  },
-
-  /* 4️⃣  implementation */
-  async (args: { channel: string; message: string }) => {
-    const { channel, message } = args;
+    channel: z.string(),
+    message: z.string()
+  },                                    // params shape
+  async ({ channel, message }: { channel: string; message: string }) => {
     try {
-      const ch = await discordClient.channels.fetch(channel);
-      if (ch?.isTextBased()) {
+      console.error("discord_send_message called:", channel, message); // <— visible in MCP stderr
+      // 1) guild / thread / cached DM
+      const ch = await discordClient.channels.fetch(channel).catch(() => null);
+      if (ch && ch.isTextBased()) {
         await (ch as any).send(message);
         return { structuredContent: { success: true } };
       }
-      return {
-        structuredContent: { success: false },
-        error: "Channel is not text-based"
-      };
+  
+      // 2) treat as USER ID → DM
+      const user = await discordClient.users.fetch(channel);
+      const dm   = await user.createDM();
+      await dm.send(message);
+      return { structuredContent: { success: true } };
+  
     } catch (err) {
+      console.error("discord_send_message error:", err);       // <— visible in MCP stderr
       return {
-        structuredContent: { success: false },
-        error: (err as Error).message
+        structuredContent: { success: false, error: (err as Error).message }
       };
     }
-  }
+  }  
 );
 
 /* -------- 2. “push” handler: Discord -> Claude ------ */
