@@ -29,7 +29,17 @@
       "Bash(npm run deploy:qa:*)",
       "Bash(npm run check-deploy:qa:*)",
       "Bash(gh pr edit:*)",
-      "Bash(aws cloudformation describe-stacks:*)"
+      "Bash(aws cloudformation describe-stacks:*)",
+      "Bash(git pull:*)",
+      "Bash(git checkout:*)",
+      "Bash(rm:*)",
+      "Bash(gh pr create:*)",
+      "Bash(npm run delete:qa:*)",
+      "Bash(aws cloudformation describe-stack-events:*)",
+      "Bash(aws cloudformation list-stack-resources:*)",
+      "Bash(mkdir:*)",
+      "Bash(ls:*)",
+      "Bash(npm run build:schema:qa:*)"
     ]
   },
   "mcpServers": {

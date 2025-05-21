@@ -1,8 +1,11 @@
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { CreateMessageResultSchema, InitializeRequestSchema, type ServerRequest } from '@modelcontextprotocol/sdk/types.js';
+import { CreateMessageResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { Client, GatewayIntentBits, TextChannel, DMChannel, NewsChannel, Message } from 'discord.js';
+import { Client, GatewayIntentBits, Message } from 'discord.js';
+import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
+
+let client: McpClient;          // <- declare once so every function sees it
 
 const discordClient = new Client({
   intents: [
@@ -45,8 +48,8 @@ interface ExpectedSamplingResult {
 const serverInfo = { name: "discord-mcp-ts-server", version: "1.0.0" };
 
 // Removed onTransportError from Server constructor options
-const rpc = new Server(serverInfo);
-const transport = new StdioServerTransport(process.stdin, process.stdout);
+const rpc = new McpServer(serverInfo);
+const serverTransport = new StdioServerTransport(process.stdin, process.stdout);
 
 // Transport specific error handling (if available, consult SDK docs for StdioServerTransport)
 // For now, relying on onclose and global handlers. Add specific error event if found.
@@ -54,38 +57,53 @@ const transport = new StdioServerTransport(process.stdin, process.stdout);
 
 async function initializeServer() {
   try {
-    await rpc.connect(transport);
-    console.log('MCP Server connected and transport started.');
+    // after rpc.connect(...)
+    await rpc.connect(serverTransport);
+
+    client = new McpClient({ name: "discord-mcp-ts-client", version: "1.0.0" });
+    await client.connect(serverTransport);          // share the same transport
+    console.error("MCP Server + Client connected.");
   } catch (error) {
     console.error('Failed to connect or start MCP transport:', error);
     process.exit(1);
   }
 }
 
-/* -------- 1. “pull” tool: Claude -> Discord -------- */
-rpc.setRequestHandler(
-  SendMessageMethodSchema, // Use the new schema for the method
-  async (request: SendMessageRequest) => { // request is now typed by SendMessageMethodSchema
-    // No need to parse request.params manually if the SDK handles it based on the schema
-    const { channel, message } = request.params; 
+// ---------- “pull” tool: Claude ➜ Discord ----------
+rpc.tool(
+  /* 1️⃣  full tool ID (namespace + name) */
+  "discord.send-message",
+
+  /* 2️⃣  parameter SHAPE (not z.object) */
+  {
+    channel: z.string().describe("Discord channel ID"),
+    message: z.string().describe("Plain-text body")
+  },
+
+  /* 3️⃣  result SHAPE */
+  {
+    success: z.boolean(),
+    error: z.string().optional()
+  },
+
+  /* 4️⃣  implementation */
+  async (args: { channel: string; message: string }) => {
+    const { channel, message } = args;
     try {
       const ch = await discordClient.channels.fetch(channel);
-      if (ch) {
-        if (ch instanceof TextChannel || ch instanceof DMChannel || ch instanceof NewsChannel) {
-          await ch.send(message);
-        } else if (ch.isTextBased() && typeof (ch as any).send === 'function') {
-          await (ch as any).send(message);
-        } else {
-          console.warn(`Channel ${channel} (ID: ${ch.id}) is not a recognized text-based channel type with a send method.`);
-        }
-      } else {
-        console.warn(`Channel ${channel} not found.`);
+      if (ch?.isTextBased()) {
+        await (ch as any).send(message);
+        return { structuredContent: { success: true } };
       }
-      return { success: true }; 
-    } catch (error) {
-      console.error(`Error in send-message handler:`, error);
-      const errorMessage = (error as Error).message;
-      return { success: false, error: errorMessage }; // Simplified error response
+      return {
+        structuredContent: { success: false },
+        error: "Channel is not text-based"
+      };
+    } catch (err) {
+      return {
+        structuredContent: { success: false },
+        error: (err as Error).message
+      };
     }
   }
 );
@@ -106,9 +124,9 @@ discordClient.on('messageCreate', async (msg: Message) => {
     };
 
     // Corrected rpc.request call
-    const response = await rpc.request(
-      { method: 'sampling/createMessage', params: requestParams }, 
-      CreateMessageResultSchema
+    const response = await client.request(
+          { method: "sampling/createMessage", params: requestParams },
+          CreateMessageResultSchema
     );
 
     // 'response' is now typed as SamplingResult (which is z.infer<typeof CreateMessageResultSchema>)
@@ -143,7 +161,7 @@ async function main() {
       process.exit(1); 
     });
 
-  transport.onclose = () => {
+    serverTransport.onclose = () => {
     console.log('MCP transport closed.');
   };
 }
