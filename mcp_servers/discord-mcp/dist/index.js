@@ -45,26 +45,31 @@ async function initializeServer() {
 rpc.tool("discord_send_message", {
     channel: zod_1.z.string(),
     message: zod_1.z.string()
-}, // params shape
-async ({ channel, message }) => {
+}, async ({ channel, message }) => {
     try {
         console.error("discord_send_message called:", channel, message); // <— visible in MCP stderr
         // 1) guild / thread / cached DM
         const ch = await discordClient.channels.fetch(channel).catch(() => null);
         if (ch && ch.isTextBased()) {
             await ch.send(message);
-            return { structuredContent: { success: true } };
+            return {
+                content: [{ type: "text", text: "✅ Message sent" }]
+            };
         }
         // 2) treat as USER ID → DM
         const user = await discordClient.users.fetch(channel);
         const dm = await user.createDM();
         await dm.send(message);
-        return { structuredContent: { success: true } };
+        return { content: [{ type: "text", text: "✅ DM sent" }] };
     }
     catch (err) {
         console.error("discord_send_message error:", err); // <— visible in MCP stderr
         return {
-            structuredContent: { success: false, error: err.message }
+            content: [{
+                    type: "text",
+                    text: `❌ ${err.message}`
+                }],
+            isError: true
         };
     }
 });
