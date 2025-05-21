@@ -43,7 +43,7 @@ async function initializeServer() {
 // ---------- “pull” tool: Claude ➜ Discord ----------
 rpc.tool(
 /* 1️⃣  full tool ID (namespace + name) */
-"discord.send-message", 
+"discord_send-message", 
 /* 2️⃣  parameter SHAPE (not z.object) */
 {
     channel: zod_1.z.string().describe("Discord channel ID"),
@@ -112,13 +112,13 @@ if (!token) {
 async function main() {
     await initializeServer();
     discordClient.login(token)
-        .then(() => console.log('Discord MCP (TypeScript with SDK) ready'))
+        .then(() => console.error('Discord MCP (TypeScript with SDK) ready'))
         .catch(error => {
         console.error('Failed to login to Discord:', error);
         process.exit(1);
     });
     serverTransport.onclose = () => {
-        console.log('MCP transport closed.');
+        console.error('MCP transport closed.');
     };
 }
 process.on('unhandledRejection', (reason, promise) => {
