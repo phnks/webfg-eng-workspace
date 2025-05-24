@@ -2,14 +2,16 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CreateMessageResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { Client, GatewayIntentBits, Message } from 'discord.js';
+import { Client, GatewayIntentBits, Partials, Message } from 'discord.js';
 
 const discordClient = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-  ],
+    GatewayIntentBits.DirectMessages,   // ← NEW
+  ], 
+  partials: [Partials.Channel]          // ← lets DMs arrive when uncached
 });
 
 // Schema for send-message tool parameters
@@ -54,7 +56,7 @@ const serverTransport = new StdioServerTransport(process.stdin, process.stdout);
 
 async function initializeServer() {
   try {
-    await rpc.connect(serverTransport);
+    await rpc.connect(serverTransport); 
 
     console.error("MCP Server connected.");
   } catch (error) {
@@ -116,8 +118,10 @@ discordClient.on('messageCreate', async (msg: Message) => {
       maxTokens: 400,
     };
 
+    console.error("→ pushing to Claude:", requestParams.messages[0].content.text);
+
     const response = await rpc.server.request(
-      { method: "sampling/createMessage", params: requestParams },
+      { method: "assistant/createMessage", params: requestParams },
       CreateMessageResultSchema
     );
 
@@ -126,12 +130,20 @@ discordClient.on('messageCreate', async (msg: Message) => {
     if (result && result.content && typeof result.content.text === 'string') {
       await msg.reply(result.content.text);
     } else {
-      console.error('Invalid response structure from sampling/createMessage:', result);
+      console.error('Invalid response structure from assistant/createMessage:', result);
       await msg.reply("Sorry, I encountered an issue processing that request.");
     }
   } catch (error) {
     console.error('Error in messageCreate handler or rpc.request:', error);
   }
+});
+
+discordClient.on("ready", () => console.error("Bot ready — logged in as", discordClient.user?.tag));
+
+discordClient.on("messageCreate", (msg) => {
+  console.error("DEBUG messageCreate:",
+    msg.channel.isDMBased() ? "DM" : `#${msg.channel.id}`,
+    `${msg.author.tag}:`, msg.content.slice(0, 60));
 });
 
 /* --------------------------------------------------- */
