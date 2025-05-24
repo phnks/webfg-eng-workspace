@@ -39,7 +39,13 @@
       "Bash(aws cloudformation list-stack-resources:*)",
       "Bash(mkdir:*)",
       "Bash(ls:*)",
-      "Bash(npm run build:schema:qa:*)"
+      "Bash(npm run build:schema:qa:*)",
+      "Bash(npm run check-deploy:prod:*)",
+      "Bash(grep:*)",
+      "Bash(aws appsync list-resolvers:*)",
+      "Bash(gh pr view:*)",
+      "WebFetch(domain:webfg-gm-app-qa43.phnks.com)",
+      "Bash(rg:*)"
     ]
   },
   "mcpServers": {
