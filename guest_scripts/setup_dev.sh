@@ -528,6 +528,36 @@ else
      echo "npm already installed: $(npm -v)"
 fi
 
+# --- Install Claude Code ---
+echo ">>> Installing Claude Code CLI globally..."
+if command -v npm &> /dev/null; then
+    npm install -g @anthropic-ai/claude-code || echo "Warning: Failed to install @anthropic-ai/claude-code globally."
+    echo "Claude Code CLI installation attempted."
+
+    # --- Copy Claude Code configuration files ---
+    echo ">>> Copying Claude Code configuration files for user $USERNAME..."
+    CLAUDE_CONFIG_SOURCE_DIR="/vagrant/claude_code" # Assuming /vagrant is the synced folder
+    CLAUDE_CONFIG_DEST_DIR="/home/$USERNAME/.claude"
+
+    if [ -d "$CLAUDE_CONFIG_SOURCE_DIR" ]; then
+        # Create destination directory as the user
+        sudo -i -u "$USERNAME" bash -c "mkdir -p '$CLAUDE_CONFIG_DEST_DIR'" || echo "Warning: Failed to create $CLAUDE_CONFIG_DEST_DIR"
+
+        # Copy files as root then change ownership, or copy as user if possible
+        # Copying as root and then chown-ing is generally safer for permissions.
+        echo "Copying files from $CLAUDE_CONFIG_SOURCE_DIR to $CLAUDE_CONFIG_DEST_DIR..."
+        cp -r "$CLAUDE_CONFIG_SOURCE_DIR"/* "$CLAUDE_CONFIG_DEST_DIR/" || echo "Warning: Failed to copy files to $CLAUDE_CONFIG_DEST_DIR"
+        
+        echo "Setting ownership of $CLAUDE_CONFIG_DEST_DIR for user $USERNAME..."
+        chown -R "$USERNAME:$USERNAME" "$CLAUDE_CONFIG_DEST_DIR" || echo "Warning: Failed to chown $CLAUDE_CONFIG_DEST_DIR"
+        echo "Claude Code configuration files copied."
+    else
+        echo "Warning: Claude Code source directory $CLAUDE_CONFIG_SOURCE_DIR not found. Skipping configuration copy."
+    fi
+else
+    echo "Warning: npm not found, cannot install Claude Code CLI or copy config."
+fi
+
 # --- Install devchat CLI tool ---
 echo ">>> Installing devchat CLI tool wrapper..."
 # Create a wrapper script in /usr/local/bin that executes the actual script
@@ -548,6 +578,91 @@ else
     echo "Warning: ${DEVCHAT_SOURCE_DIR}/${DEVCHAT_SCRIPT} not found. Cannot install devchat tool."
     echo "Ensure the vm_cli directory is present in the project root and synced."
 fi
+
+# --- Setup Discord MCP Server ---
+echo ">>> Setting up Discord MCP Server for user $USERNAME..."
+MCP_SOURCE_DIR="/vagrant/mcp_servers/discord-mcp"
+MCP_DEST_DIR="/home/$USERNAME/discord-mcp"
+
+if [ -d "$MCP_SOURCE_DIR" ]; then
+    echo "Copying Discord MCP server files from $MCP_SOURCE_DIR to $MCP_DEST_DIR..."
+    mkdir -p "$MCP_DEST_DIR"
+    # Copy package.json, tsconfig.json, and the src directory
+    cp "$MCP_SOURCE_DIR/package.json" "$MCP_DEST_DIR/"
+    cp "$MCP_SOURCE_DIR/tsconfig.json" "$MCP_DEST_DIR/" # tsconfig is needed for 'npm run build'
+    if [ -d "$MCP_SOURCE_DIR/src" ]; then
+        cp -r "$MCP_SOURCE_DIR/src" "$MCP_DEST_DIR/"
+    else
+        echo "Warning: $MCP_SOURCE_DIR/src directory not found. Cannot copy MCP source."
+    fi
+
+    echo "Setting ownership of $MCP_DEST_DIR for user $USERNAME..."
+    chown -R "$USERNAME:$USERNAME" "$MCP_DEST_DIR"
+
+    echo "Cleaning up old artifacts in $MCP_DEST_DIR before reinstalling..."
+    sudo -i -u "$USERNAME" bash -c "cd '$MCP_DEST_DIR' && rm -rf node_modules dist"
+
+    echo "Installing Discord MCP server dependencies (including dev for build)..."
+    # Install all dependencies first (including typescript for tsc)
+    if sudo -i -u "$USERNAME" bash -c "cd '$MCP_DEST_DIR' && npm install"; then
+        echo "Discord MCP dependencies installed."
+        echo "Compiling Discord MCP server (TypeScript to JavaScript)..."
+        # Run the build script which executes tsc
+        if sudo -i -u "$USERNAME" bash -c "cd '$MCP_DEST_DIR' && npm run build"; then
+            echo "Discord MCP server compiled successfully."
+
+            # Now, prune devDependencies if possible (optional, but good for production)
+            echo "Pruning devDependencies for Discord MCP server..."
+            sudo -i -u "$USERNAME" bash -c "cd '$MCP_DEST_DIR' && npm prune --omit=dev" || echo "Warning: npm prune failed, continuing..."
+
+
+            if [ -z "$DISCORD_BOT_TOKEN" ]; then
+                echo "Warning: DISCORD_BOT_TOKEN is not set. Cannot configure Discord MCP service environment."
+            fi
+
+            DISCORD_MCP_SERVICE_NAME="discord-mcp-$USERNAME.service"
+            DISCORD_MCP_SERVICE_FILE="/etc/systemd/system/$DISCORD_MCP_SERVICE_NAME"
+            # Correct path to the compiled JavaScript file
+            MCP_SCRIPT_PATH="$MCP_DEST_DIR/dist/index.js"
+
+            echo "Creating systemd service file for Discord MCP server at $DISCORD_MCP_SERVICE_FILE..."
+            cat > "$DISCORD_MCP_SERVICE_FILE" << EOF_MCP_SERVICE
+[Unit]
+Description=Discord MCP Server for $USERNAME
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$USERNAME
+Group=$(id -gn "$USERNAME")
+WorkingDirectory=$MCP_DEST_DIR
+ExecStart=/usr/bin/node $MCP_SCRIPT_PATH
+Restart=on-failure
+Environment="DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}"
+StandardOutput=append:/var/log/discord-mcp-${USERNAME}.log
+StandardError=append:/var/log/discord-mcp-${USERNAME}.error.log
+
+[Install]
+WantedBy=multi-user.target
+EOF_MCP_SERVICE
+
+            echo "Reloading systemd daemon, enabling and starting Discord MCP service..."
+            systemctl daemon-reload
+            systemctl enable "$DISCORD_MCP_SERVICE_NAME"
+            systemctl restart "$DISCORD_MCP_SERVICE_NAME" # Use restart to ensure it picks up changes
+            echo "Discord MCP Server systemd service configured."
+
+        else
+            echo "Warning: Failed to compile Discord MCP server (npm run build failed)."
+        fi
+    else
+        echo "Warning: Failed to install Discord MCP dependencies (npm install failed)."
+    fi
+else
+    echo "Warning: Discord MCP source directory $MCP_SOURCE_DIR not found. Skipping Discord MCP server setup."
+fi
+# --- End Discord MCP Server Setup ---
 
 # --- Install Correct VirtualBox Guest Additions (7.0.x) ---
 echo ">>> Checking/Installing VirtualBox Guest Additions (target: 7.0.x)..."
@@ -591,10 +706,7 @@ else
         # Decide if we should still create the flag or exit.
         # For robustness, let's only create the flag on a zero exit code from the installer.
         # If a warning is acceptable and GA still works, this logic might need adjustment.
-        # Given `set -e`, the `|| { ... }` block for the installer was more for logging.
-        # If the installer truly fails and `set -e` is active, the script would exit before cleanup.
-        # Let's refine this: if the `sh` command fails, `set -e` handles it.
-        # The `|| { echo "Warning..." }` was to provide a custom message.
+        # Given `set -e`, the `|| { echo "Warning..." }` block for the installer was more for logging.
         # We'll keep the original structure for the installer run and create the flag after cleanup if we reach that point.
     fi
     # The original script had:
@@ -620,6 +732,32 @@ else
     echo ">>> Guest Additions ${GA_VERSION} installation attempt complete."
     echo "Creating flag file: ${GA_FLAG_FILE}"
     touch "${GA_FLAG_FILE}" || echo "Warning: Failed to create flag file ${GA_FLAG_FILE}"
+fi
+
+# --- Configure LightDM for Autologin ---
+echo ">>> Configuring LightDM for autologin for user $USERNAME..."
+LIGHTDM_CONF_DIR="/etc/lightdm/lightdm.conf.d"
+LIGHTDM_AUTOLOGIN_CONF_FILE="$LIGHTDM_CONF_DIR/50-autologin.conf"
+
+# Check if lightdm is installed (it should be, as xubuntu-desktop is a dependency)
+if ! dpkg -s lightdm &> /dev/null; then
+    echo "Warning: lightdm is not installed. Skipping autologin configuration."
+else
+    mkdir -p "$LIGHTDM_CONF_DIR"
+
+    # Create the autologin configuration file
+    # The USERNAME variable will be expanded here.
+    # The session is set to xubuntu, matching the installed desktop.
+    cat > "$LIGHTDM_AUTOLOGIN_CONF_FILE" << EOF_LIGHTDM
+[SeatDefaults]
+autologin-guest=false
+autologin-user=$USERNAME
+autologin-user-timeout=0
+autologin-session=xubuntu
+EOF_LIGHTDM
+
+    chmod 644 "$LIGHTDM_AUTOLOGIN_CONF_FILE"
+    echo "LightDM autologin configured for $USERNAME."
 fi
 
 # Clean up apt cache
