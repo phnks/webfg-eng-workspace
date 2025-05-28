@@ -2,3 +2,4 @@
 # Used by manage_all_vms.sh script.
 anum
 homonculus
+dockertest

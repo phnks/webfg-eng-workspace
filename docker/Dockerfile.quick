@@ -1,0 +1,22 @@
+# Quick test Dockerfile using pre-built image
+FROM node:18-bullseye-slim
+
+# Install Python and basic tools
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    git \
+    curl \
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create user
+ARG USERNAME=agent
+RUN useradd -m -s /bin/bash $USERNAME \
+    && echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/$USERNAME
+
+WORKDIR /home/$USERNAME
+USER $USERNAME
+
+CMD ["/bin/bash"]

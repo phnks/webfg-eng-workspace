@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  # Host service remains on the host machine, not in a container
+  # It manages Discord bot connections for all containers
+  
+  # Template for agent containers (will be dynamically created per user)
+  # Example: agent-john, agent-jane, etc.
+  
+networks:
+  agent-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  workspace:
+    driver: local
