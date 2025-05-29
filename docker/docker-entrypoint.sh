@@ -43,10 +43,10 @@ source /home/agent/.venvs/autogen/bin/activate
 pip install --quiet --upgrade pip
 pip install --quiet pyautogen discord.py python-dotenv google-genai vertexai pillow jsonschema ag2[gemini]
 
-# Override local .env with container environment variables for AutoGen
+# Write .env file with container environment variables for AutoGen
 echo "Setting up environment variables for AutoGen..."
 cat > /home/agent/workspace/.env << EOF
-# Container environment variables (overrides local .env)
+# Container environment variables
 DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
 DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
 OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -61,9 +61,11 @@ AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
 AWS_REGION=${AWS_DEFAULT_REGION}
 AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
 AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}
-BOT_USER=${BOT_USER}
-AGENT_HOME=${AGENT_HOME}
+BOT_USER=${BOT_USER:-agent}
+AGENT_HOME=${AGENT_HOME:-/home/agent/autogen_agent}
 EOF
+
+echo "Created .env file with environment variables"
 
 # 2. Setup Discord MCP in writable location
 echo "Setting up Discord MCP..."

@@ -51,14 +51,7 @@ fi
 
 # Create user-specific docker-compose file
 echo "Creating docker-compose file for $USERNAME..."
-
-# Check if we should use the quick template
-if docker images | grep -q webfg-quick; then
-    TEMPLATE_FILE="$DOCKER_DIR/docker-compose.quick-template.yml"
-    echo "Using quick template for faster setup"
-else
-    TEMPLATE_FILE="$DOCKER_DIR/docker-compose.template.yml"
-fi
+TEMPLATE_FILE="$DOCKER_DIR/docker-compose.template.yml"
 
 # Use more specific replacements to avoid replacing the args key
 cat "$TEMPLATE_FILE" | \
@@ -93,14 +86,10 @@ if [ -f "$PROJECT_ROOT/autogen_agent/.env" ]; then
     export $(grep -v '^#' "$PROJECT_ROOT/autogen_agent/.env" | xargs)
 fi
 
-# Skip build step if using quick template (image is already specified)
-if ! grep -q "image: webfg-quick" "$DOCKER_DIR/docker-compose.$USERNAME.yml"; then
-    echo "Building Docker image..."
-    cd "$PROJECT_ROOT"
-    docker-compose -f "$DOCKER_DIR/docker-compose.$USERNAME.yml" build
-else
-    echo "Using pre-built webfg-quick image"
-fi
+# Build the Docker image
+echo "Building Docker image..."
+cd "$DOCKER_DIR"
+docker build -t webfg:latest .
 
 # Container will use entrypoint script instead of custom start script
 

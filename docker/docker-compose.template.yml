@@ -5,14 +5,7 @@ version: '3.8'
 
 services:
   agent-USERNAME:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-      target: AGENT_TYPE-agent  # autogen-agent or claude-code-agent
-      args:
-        USERNAME: USERNAME
-        USER_UID: 1000
-        USER_GID: 1000
+    image: webfg:latest
     container_name: agent-USERNAME
     hostname: USERNAME
     networks:
