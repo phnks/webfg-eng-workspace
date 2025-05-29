@@ -41,7 +41,7 @@ fi
 # Always activate and ensure dependencies are installed
 source /home/agent/.venvs/autogen/bin/activate
 pip install --quiet --upgrade pip
-pip install --quiet pyautogen discord.py python-dotenv google-genai vertexai
+pip install --quiet pyautogen discord.py python-dotenv google-genai vertexai pillow jsonschema ag2[gemini]
 
 # Override local .env with container environment variables for AutoGen
 echo "Setting up environment variables for AutoGen..."
