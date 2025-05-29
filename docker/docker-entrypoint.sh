@@ -43,6 +43,20 @@ source /home/agent/.venvs/autogen/bin/activate
 pip install --quiet --upgrade pip
 pip install --quiet pyautogen discord.py python-dotenv
 
+# Override local .env with container environment variables for AutoGen
+echo "Setting up environment variables for AutoGen..."
+cat > /home/agent/workspace/.env << EOF
+# Container environment variables (overrides local .env)
+DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
+OPENAI_API_KEY=${OPENAI_API_KEY}
+GEMINI_API_KEY=${GEMINI_API_KEY}
+ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+USE_GEMINI=${USE_GEMINI:-true}
+BOT_USER=${BOT_USER}
+AGENT_HOME=${AGENT_HOME}
+EOF
+
 # 2. Setup Discord MCP in writable location
 echo "Setting up Discord MCP..."
 if [ ! -d "/home/agent/discord-mcp-local" ]; then
@@ -123,6 +137,74 @@ cd /home/agent/autogen_agent
 # Ensure original scripts are executable
 chmod +x *.sh 2>/dev/null || true
 
+# Create fixed version of start_agent.sh that works in container
+cat > /home/agent/autogen_agent/start_agent_fixed.sh << 'EOF'
+#!/usr/bin/env bash
+if [[ -z "$AGENT_HOME" ]]; then
+    echo "❌  Could not locate AGENT_HOME" >&2
+    echo "    AGENT_HOME is not set" >&2
+    exit 1
+fi
+
+cd "$AGENT_HOME" || {
+    echo "❌  cd \"$AGENT_HOME\" failed" >&2
+    exit 1
+}
+
+echo "AGENT_HOME: $AGENT_HOME"
+
+# Use writable locations for PID and log files
+PID_FILE="/home/agent/workspace/.agent.pid"
+LOG_FILE="/home/agent/workspace/.agent.log"
+VENV_PATH="/home/agent/.venvs/autogen/bin/activate"
+SCRIPT_NAME="$AGENT_HOME/autogen_discord_bot.py"
+
+# Check if already running
+if [ -f "$PID_FILE" ]; then
+    PID=$(cat "$PID_FILE")
+    if ps -p $PID > /dev/null; then
+        echo "Agent is already running with PID $PID."
+        exit 0
+    else
+        echo "Warning: PID file found, but process $PID is not running. Removing stale PID file."
+        rm "$PID_FILE"
+    fi
+fi
+
+# Load container environment variables
+echo "Loading container environment variables..."
+export BOT_USER=${BOT_USER}
+export DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+export DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
+export OPENAI_API_KEY=${OPENAI_API_KEY}
+export GEMINI_API_KEY=${GEMINI_API_KEY}
+export ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+export USE_GEMINI=${USE_GEMINI:-true}
+
+# Activate virtual environment and run the script in the background
+echo "Starting AutoGen Discord Bot..."
+echo "Using Discord Bot Token: ${DISCORD_BOT_TOKEN:0:20}..."
+source "$VENV_PATH"
+nohup python "$SCRIPT_NAME" >> "$LOG_FILE" 2>&1 &
+
+# Get the PID of the background process
+BG_PID=$!
+echo $BG_PID > "$PID_FILE"
+
+# Check if the process started successfully
+sleep 2 # Give it a moment to potentially fail
+if ps -p $BG_PID > /dev/null; then
+    echo "Agent started successfully with PID $BG_PID. Output logged to $LOG_FILE"
+else
+    echo "Error: Agent failed to start. Check $LOG_FILE for details."
+    rm "$PID_FILE" # Clean up PID file if start failed
+    exit 1
+fi
+
+exit 0
+EOF
+chmod +x /home/agent/autogen_agent/start_agent_fixed.sh
+
 # Create wrapper script for original start_agent.sh that fixes the venv path
 cat > /home/agent/start_agent_wrapper.sh << 'EOF'
 #!/bin/bash
@@ -186,16 +268,18 @@ chmod +x /home/agent/start_agent_wrapper.sh
 echo "========================================="
 echo "Container setup complete!"
 echo "Available commands:"
-echo "  /home/agent/start_autogen.sh            - Start AutoGen agent (simple wrapper)"
-echo "  /home/agent/start_claude.sh             - Start Claude Code agent"
-echo "  /home/agent/start_agent_wrapper.sh      - Start AutoGen agent (compatible wrapper)"
-echo "  devchat                                 - Send Discord messages"
+echo "  /home/agent/start_autogen.sh                    - Start AutoGen agent (simple wrapper)"
+echo "  /home/agent/start_claude.sh                     - Start Claude Code agent"
+echo "  /home/agent/autogen_agent/start_agent_fixed.sh  - Start AutoGen agent (fixed original script)"
+echo "  /home/agent/start_agent_wrapper.sh              - Start AutoGen agent (compatible wrapper)"
+echo "  devchat                                         - Send Discord messages"
 echo "Environment variables set:"
 echo "  AGENT_HOME=$AGENT_HOME"
 echo "  BOT_USER=$BOT_USER"
+echo "  DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:0:20}..."
 echo "========================================="
 
 # Drop to shell instead of auto-starting to prevent restart loops
 echo "Dropping to shell. You can manually run the agent scripts."
-echo "Use /home/agent/start_agent_wrapper.sh for original script compatibility"
+echo "Use start_agent_fixed.sh for the corrected original script"
 exec /bin/bash
