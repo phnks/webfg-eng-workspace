@@ -49,20 +49,8 @@ if [ -f "$HOME/.gitconfig" ]; then
     cp "$HOME/.gitconfig" "$DOCKER_DIR/volumes/$USERNAME/gitconfig"
 fi
 
-# Create user-specific docker-compose file
-echo "Creating docker-compose file for $USERNAME..."
-TEMPLATE_FILE="$DOCKER_DIR/docker-compose.template.yml"
-
-# Use more specific replacements to avoid replacing the args key
-cat "$TEMPLATE_FILE" | \
-    sed "s/agent-USERNAME/agent-$USERNAME/g" | \
-    sed "s/hostname: USERNAME/hostname: $USERNAME/g" | \
-    sed "s/volumes\/USERNAME/volumes\/$USERNAME/g" | \
-    sed "s/USER=USERNAME/USER=$USERNAME/g" | \
-    sed "s/BOT_TOKEN_USERNAME/BOT_TOKEN_$USERNAME/g" | \
-    sed "s/USERNAME: USERNAME/USERNAME: $USERNAME/g" | \
-    sed "s/AGENT_TYPE-agent/$AGENT_TYPE-agent/g" | \
-    sed "s/AGENT_TYPE=AGENT_TYPE/AGENT_TYPE=$AGENT_TYPE/g" > "$DOCKER_DIR/docker-compose.$USERNAME.yml"
+# No need to create user-specific docker-compose file anymore
+# The main docker-compose.yml is dynamic and uses environment variables
 
 # Create network if it doesn't exist
 if ! docker network inspect agent-network >/dev/null 2>&1; then
@@ -72,6 +60,9 @@ fi
 
 # Don't export environment variables - docker-compose will use --env-file
 echo "Using environment variables from docker/.env"
+
+# Store agent type for future use
+echo "$AGENT_TYPE" > "$DOCKER_DIR/volumes/$USERNAME/.agent_type"
 
 # Skip build for now - use existing image
 echo "Using existing Docker image..."

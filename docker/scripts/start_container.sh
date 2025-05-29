@@ -17,18 +17,28 @@ DOCKER_DIR="$PROJECT_ROOT/docker"
 
 echo "Starting Docker container for user: $USERNAME"
 
-# Check if docker-compose file exists
-if [ ! -f "$DOCKER_DIR/docker-compose.$USERNAME.yml" ]; then
+# Check if user has been provisioned (volumes exist)
+if [ ! -d "$DOCKER_DIR/volumes/$USERNAME" ]; then
     echo "Error: Container not provisioned for $USERNAME"
     echo "Run: $SCRIPT_DIR/provision_container.sh $USERNAME <agent_type>"
     exit 1
 fi
 
-# Don't export environment variables - let docker-compose handle it via --env-file
+# Get user's bot token and agent type from .env
+BOT_TOKEN_VAR="BOT_TOKEN_${USERNAME}"
+BOT_TOKEN=$(grep "^${BOT_TOKEN_VAR}=" "$DOCKER_DIR/.env" | cut -d'=' -f2-)
 
-# Start the container
-cd "$PROJECT_ROOT"
-docker-compose --env-file "$DOCKER_DIR/.env" -f "$DOCKER_DIR/docker-compose.$USERNAME.yml" up -d
+# Get agent type from a marker file
+if [ -f "$DOCKER_DIR/volumes/$USERNAME/.agent_type" ]; then
+    AGENT_TYPE=$(cat "$DOCKER_DIR/volumes/$USERNAME/.agent_type")
+else
+    AGENT_TYPE="autogen"  # Default
+fi
+
+# Start the container with dynamic environment variables
+cd "$DOCKER_DIR"
+USERNAME=$USERNAME AGENT_TYPE=$AGENT_TYPE BOT_TOKEN=$BOT_TOKEN \
+docker-compose --env-file "$DOCKER_DIR/.env" up -d
 
 # Wait for container to be ready
 echo "Waiting for container to be ready..."

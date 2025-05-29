@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "discord": {
+      "command": "node",
+      "args": ["/home/homonculus/discord-mcp/dist/index.js"],
+      "env": {
+        "DISCORD_BOT_TOKEN": "${BOT_TOKEN_homonculus}",
+        "DISCORD_CHANNEL_ID": "${DISCORD_CHANNEL_ID}"
+      }
+    }
+  }
+}

@@ -24,7 +24,7 @@ if [ ! -f "$DOCKER_DIR/docker-compose.$USERNAME.yml" ]; then
 fi
 
 # Stop the container
-cd "$PROJECT_ROOT"
-docker-compose --env-file "$DOCKER_DIR/.env" -f "$DOCKER_DIR/docker-compose.$USERNAME.yml" down
+cd "$DOCKER_DIR"
+USERNAME=$USERNAME docker-compose --env-file "$DOCKER_DIR/.env" down
 
 echo "Container agent-$USERNAME stopped"

@@ -1,7 +1,0 @@
-[credential]
-	helper = store --file ~/.git-credentials
-[user]
-	email = anum@email.com
-	name = anum
-[safe]
-	directory = /home/anum/webfg-app
