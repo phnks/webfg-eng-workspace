@@ -24,11 +24,17 @@ if [ ! -f "$DOCKER_DIR/docker-compose.$USERNAME.yml" ]; then
     exit 1
 fi
 
-# Load environment variables
+# Load environment variables from docker .env (priority)
+if [ -f "$DOCKER_DIR/.env" ]; then
+    export $(grep -v '^#' "$DOCKER_DIR/.env" | xargs)
+fi
+
+# Load environment variables from host service .env (fallback)
 if [ -f "$PROJECT_ROOT/host_service/.env" ]; then
     export $(grep -v '^#' "$PROJECT_ROOT/host_service/.env" | xargs)
 fi
 
+# Load environment variables from autogen .env (fallback)
 if [ -f "$PROJECT_ROOT/autogen_agent/.env" ]; then
     export $(grep -v '^#' "$PROJECT_ROOT/autogen_agent/.env" | xargs)
 fi
