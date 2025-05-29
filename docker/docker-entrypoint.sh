@@ -140,6 +140,17 @@ chmod +x /home/agent/start_claude.sh
 
 # 5. Make original AutoGen scripts compatible
 echo "Making original AutoGen scripts compatible..."
+cd /home/agent
+
+# Create symlink for venv where original script expects it
+ln -sf /home/agent/.venvs/autogen /home/agent/venv
+
+# Create .agent.pid and .agent.log in writable location
+touch /home/agent/workspace/.agent.pid
+touch /home/agent/workspace/.agent.log
+ln -sf /home/agent/workspace/.agent.pid /home/agent/.agent.pid
+ln -sf /home/agent/workspace/.agent.log /home/agent/.agent.log
+
 cd /home/agent/autogen_agent
 
 # Ensure original scripts are executable
@@ -148,6 +159,11 @@ chmod +x *.sh 2>/dev/null || true
 # Create fixed version of start_agent.sh that works in container (in writable location)
 cat > /home/agent/start_agent_fixed.sh << 'EOF'
 #!/usr/bin/env bash
+
+# Set and export required environment variables
+export AGENT_HOME=/home/agent/autogen_agent
+export BOT_USER=agent
+
 if [[ -z "$AGENT_HOME" ]]; then
     echo "❌  Could not locate AGENT_HOME" >&2
     echo "    AGENT_HOME is not set" >&2
@@ -295,7 +311,14 @@ echo "  BOT_USER=$BOT_USER"
 echo "  DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:0:20}..."
 echo "========================================="
 
-# Drop to shell instead of auto-starting to prevent restart loops
-echo "Dropping to shell. You can manually run the agent scripts."
-echo "Use start_agent_fixed.sh for the corrected original script"
-exec /bin/bash
+# Start the appropriate agent based on AGENT_TYPE
+if [ "$AGENT_TYPE" = "autogen" ]; then
+    echo "Starting AutoGen agent automatically..."
+    exec /home/agent/start_agent_fixed.sh
+elif [ "$AGENT_TYPE" = "claude-code" ]; then
+    echo "Starting Claude Code agent automatically..."
+    exec /home/agent/start_claude.sh
+else
+    echo "Unknown agent type: $AGENT_TYPE"
+    exec /bin/bash
+fi
