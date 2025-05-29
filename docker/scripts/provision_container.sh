@@ -70,21 +70,8 @@ if ! docker network inspect agent-network >/dev/null 2>&1; then
     docker network create --subnet=172.20.0.0/16 agent-network
 fi
 
-# Load environment variables from docker .env (priority)
-if [ -f "$DOCKER_DIR/.env" ]; then
-    export $(grep -v '^#' "$DOCKER_DIR/.env" | xargs)
-    echo "Loaded environment variables from docker/.env"
-fi
-
-# Load environment variables from host service .env (fallback)
-if [ -f "$PROJECT_ROOT/host_service/.env" ]; then
-    export $(grep -v '^#' "$PROJECT_ROOT/host_service/.env" | xargs)
-fi
-
-# Load environment variables from autogen .env (fallback)
-if [ -f "$PROJECT_ROOT/autogen_agent/.env" ]; then
-    export $(grep -v '^#' "$PROJECT_ROOT/autogen_agent/.env" | xargs)
-fi
+# Don't export environment variables - docker-compose will use --env-file
+echo "Using environment variables from docker/.env"
 
 # Skip build for now - use existing image
 echo "Using existing Docker image..."
