@@ -137,8 +137,8 @@ cd /home/agent/autogen_agent
 # Ensure original scripts are executable
 chmod +x *.sh 2>/dev/null || true
 
-# Create fixed version of start_agent.sh that works in container
-cat > /home/agent/autogen_agent/start_agent_fixed.sh << 'EOF'
+# Create fixed version of start_agent.sh that works in container (in writable location)
+cat > /home/agent/start_agent_fixed.sh << 'EOF'
 #!/usr/bin/env bash
 if [[ -z "$AGENT_HOME" ]]; then
     echo "❌  Could not locate AGENT_HOME" >&2
@@ -203,7 +203,7 @@ fi
 
 exit 0
 EOF
-chmod +x /home/agent/autogen_agent/start_agent_fixed.sh
+chmod +x /home/agent/start_agent_fixed.sh
 
 # Create wrapper script for original start_agent.sh that fixes the venv path
 cat > /home/agent/start_agent_wrapper.sh << 'EOF'
@@ -270,7 +270,7 @@ echo "Container setup complete!"
 echo "Available commands:"
 echo "  /home/agent/start_autogen.sh                    - Start AutoGen agent (simple wrapper)"
 echo "  /home/agent/start_claude.sh                     - Start Claude Code agent"
-echo "  /home/agent/autogen_agent/start_agent_fixed.sh  - Start AutoGen agent (fixed original script)"
+echo "  /home/agent/start_agent_fixed.sh                - Start AutoGen agent (fixed original script)"
 echo "  /home/agent/start_agent_wrapper.sh              - Start AutoGen agent (compatible wrapper)"
 echo "  devchat                                         - Send Discord messages"
 echo "Environment variables set:"
