@@ -105,7 +105,7 @@ fi
 export BOT_USER=agent
 
 echo "Starting autogen_discord_bot.py..."
-python autogen_discord_bot.py
+exec python autogen_discord_bot.py
 EOF
 chmod +x /home/agent/start_autogen.sh
 
@@ -213,27 +213,14 @@ export AWS_REGION=${AWS_DEFAULT_REGION}
 export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
 export AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}
 
-# Activate virtual environment and run the script in the background
+# Activate virtual environment and run the script
 echo "Starting AutoGen Discord Bot..."
 echo "Using Discord Bot Token: ${DISCORD_BOT_TOKEN:0:20}..."
 source "$VENV_PATH"
-nohup python "$SCRIPT_NAME" >> "$LOG_FILE" 2>&1 &
 
-# Get the PID of the background process
-BG_PID=$!
-echo $BG_PID > "$PID_FILE"
-
-# Check if the process started successfully
-sleep 2 # Give it a moment to potentially fail
-if ps -p $BG_PID > /dev/null; then
-    echo "Agent started successfully with PID $BG_PID. Output logged to $LOG_FILE"
-else
-    echo "Error: Agent failed to start. Check $LOG_FILE for details."
-    rm "$PID_FILE" # Clean up PID file if start failed
-    exit 1
-fi
-
-exit 0
+# Run in foreground for container
+echo "Running AutoGen agent in foreground..."
+exec python "$SCRIPT_NAME" 2>&1 | tee -a "$LOG_FILE"
 EOF
 chmod +x /home/agent/start_agent_fixed.sh
 
