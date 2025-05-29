@@ -1,8 +1,6 @@
 # Dynamic Docker Compose configuration for agent containers
 # Uses environment variables: USERNAME and AGENT_TYPE
 
-version: '3.8'
-
 services:
   agent:
     image: webfg-quick:latest

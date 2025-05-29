@@ -17,8 +17,8 @@ DOCKER_DIR="$PROJECT_ROOT/docker"
 
 echo "Stopping Docker container for user: $USERNAME"
 
-# Check if docker-compose file exists
-if [ ! -f "$DOCKER_DIR/docker-compose.$USERNAME.yml" ]; then
+# Check if user has been provisioned (volumes exist)
+if [ ! -d "$DOCKER_DIR/volumes/$USERNAME" ]; then
     echo "Error: Container not provisioned for $USERNAME"
     exit 1
 fi
