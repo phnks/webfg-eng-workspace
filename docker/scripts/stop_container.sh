@@ -25,6 +25,6 @@ fi
 
 # Stop the container
 cd "$PROJECT_ROOT"
-docker-compose -f "$DOCKER_DIR/docker-compose.$USERNAME.yml" down
+docker-compose --env-file "$DOCKER_DIR/.env" -f "$DOCKER_DIR/docker-compose.$USERNAME.yml" down
 
 echo "Container agent-$USERNAME stopped"

@@ -41,7 +41,7 @@ fi
 
 # Start the container
 cd "$PROJECT_ROOT"
-docker-compose -f "$DOCKER_DIR/docker-compose.$USERNAME.yml" up -d
+docker-compose --env-file "$DOCKER_DIR/.env" -f "$DOCKER_DIR/docker-compose.$USERNAME.yml" up -d
 
 # Wait for container to be ready
 echo "Waiting for container to be ready..."
