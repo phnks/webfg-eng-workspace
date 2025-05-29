@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
 # Install base system packages
-RUN apt-get update && apt-get install -y \
+RUN apt-get update || true && apt-get install -y --allow-unauthenticated \
     curl \
     wget \
     git \
@@ -29,6 +29,7 @@ RUN apt-get update && apt-get install -y \
     python3-venv \
     python3-dev \
     openssh-client \
+    procps \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js v22

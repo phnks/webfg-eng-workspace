@@ -86,10 +86,8 @@ if [ -f "$PROJECT_ROOT/autogen_agent/.env" ]; then
     export $(grep -v '^#' "$PROJECT_ROOT/autogen_agent/.env" | xargs)
 fi
 
-# Build the Docker image
-echo "Building Docker image..."
-cd "$DOCKER_DIR"
-docker build -t webfg:latest .
+# Skip build for now - use existing image
+echo "Using existing Docker image..."
 
 # Container will use entrypoint script instead of custom start script
 
