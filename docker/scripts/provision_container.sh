@@ -51,9 +51,25 @@ fi
 
 # Create user-specific docker-compose file
 echo "Creating docker-compose file for $USERNAME..."
-cat "$DOCKER_DIR/docker-compose.template.yml" | \
-    sed "s/USERNAME/$USERNAME/g" | \
-    sed "s/AGENT_TYPE/$AGENT_TYPE/g" > "$DOCKER_DIR/docker-compose.$USERNAME.yml"
+
+# Check if we should use the quick template
+if docker images | grep -q webfg-quick; then
+    TEMPLATE_FILE="$DOCKER_DIR/docker-compose.quick-template.yml"
+    echo "Using quick template for faster setup"
+else
+    TEMPLATE_FILE="$DOCKER_DIR/docker-compose.template.yml"
+fi
+
+# Use more specific replacements to avoid replacing the args key
+cat "$TEMPLATE_FILE" | \
+    sed "s/agent-USERNAME/agent-$USERNAME/g" | \
+    sed "s/hostname: USERNAME/hostname: $USERNAME/g" | \
+    sed "s/volumes\/USERNAME/volumes\/$USERNAME/g" | \
+    sed "s/USER=USERNAME/USER=$USERNAME/g" | \
+    sed "s/BOT_TOKEN_USERNAME/BOT_TOKEN_$USERNAME/g" | \
+    sed "s/USERNAME: USERNAME/USERNAME: $USERNAME/g" | \
+    sed "s/AGENT_TYPE-agent/$AGENT_TYPE-agent/g" | \
+    sed "s/AGENT_TYPE=AGENT_TYPE/AGENT_TYPE=$AGENT_TYPE/g" > "$DOCKER_DIR/docker-compose.$USERNAME.yml"
 
 # Create network if it doesn't exist
 if ! docker network inspect agent-network >/dev/null 2>&1; then
@@ -61,20 +77,30 @@ if ! docker network inspect agent-network >/dev/null 2>&1; then
     docker network create --subnet=172.20.0.0/16 agent-network
 fi
 
-# Load environment variables from host service .env
+# Load environment variables from docker .env (priority)
+if [ -f "$DOCKER_DIR/.env" ]; then
+    export $(grep -v '^#' "$DOCKER_DIR/.env" | xargs)
+    echo "Loaded environment variables from docker/.env"
+fi
+
+# Load environment variables from host service .env (fallback)
 if [ -f "$PROJECT_ROOT/host_service/.env" ]; then
     export $(grep -v '^#' "$PROJECT_ROOT/host_service/.env" | xargs)
 fi
 
-# Load environment variables from autogen .env
+# Load environment variables from autogen .env (fallback)
 if [ -f "$PROJECT_ROOT/autogen_agent/.env" ]; then
     export $(grep -v '^#' "$PROJECT_ROOT/autogen_agent/.env" | xargs)
 fi
 
-# Build the container
-echo "Building Docker image..."
-cd "$PROJECT_ROOT"
-docker-compose -f "$DOCKER_DIR/docker-compose.$USERNAME.yml" build
+# Skip build step if using quick template (image is already specified)
+if ! grep -q "image: webfg-quick" "$DOCKER_DIR/docker-compose.$USERNAME.yml"; then
+    echo "Building Docker image..."
+    cd "$PROJECT_ROOT"
+    docker-compose -f "$DOCKER_DIR/docker-compose.$USERNAME.yml" build
+else
+    echo "Using pre-built webfg-quick image"
+fi
 
 # Container will use entrypoint script instead of custom start script
 

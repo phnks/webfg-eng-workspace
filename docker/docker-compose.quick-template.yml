@@ -1,18 +1,9 @@
-# Template for creating per-user agent containers
-# This file will be used to generate user-specific docker-compose files
-
+# Template for creating per-user agent containers (using quick image)
 version: '3.8'
 
 services:
   agent-USERNAME:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-      target: AGENT_TYPE-agent  # autogen-agent or claude-code-agent
-      args:
-        USERNAME: USERNAME
-        USER_UID: 1000
-        USER_GID: 1000
+    image: webfg-quick:latest
     container_name: agent-USERNAME
     hostname: USERNAME
     networks:
@@ -26,6 +17,7 @@ services:
       - ../autogen_agent:/home/agent/autogen_agent:ro
       - ../mcp_servers/discord-mcp:/home/agent/discord-mcp:ro
       - ../vm_cli:/home/agent/vm_cli:ro
+      - ../docker/docker-entrypoint.sh:/home/agent/entrypoint.sh:ro
     environment:
       - USER=USERNAME
       - AGENT_TYPE=AGENT_TYPE
@@ -44,6 +36,7 @@ services:
     stdin_open: true
     tty: true
     restart: unless-stopped
+    entrypoint: ["/home/agent/entrypoint.sh"]
 
 networks:
   agent-network:

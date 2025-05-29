@@ -1,36 +1,28 @@
-# Template for creating per-user agent containers
-# This file will be used to generate user-specific docker-compose files
-
+# Template for creating per-user agent containers (using quick image)
 version: '3.8'
 
 services:
-  agent-USERNAME:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-      target: AGENT_TYPE-agent  # autogen-agent or claude-code-agent
-      args:
-        USERNAME: USERNAME
-        USER_UID: 1000
-        USER_GID: 1000
-    container_name: agent-USERNAME
-    hostname: USERNAME
+  agent-homonculus:
+    image: webfg-quick:latest
+    container_name: agent-homonculus
+    hostname: homonculus
     networks:
       - agent-network
     volumes:
-      - ./volumes/USERNAME/workspace:/home/agent/workspace
-      - ./volumes/USERNAME/claude:/home/agent/.claude
-      - ./volumes/USERNAME/config:/home/agent/.config
-      - ./volumes/USERNAME/ssh:/home/agent/.ssh:ro
-      - ./volumes/USERNAME/gitconfig:/home/agent/.gitconfig:ro
+      - ./volumes/homonculus/workspace:/home/agent/workspace
+      - ./volumes/homonculus/claude:/home/agent/.claude
+      - ./volumes/homonculus/config:/home/agent/.config
+      - ./volumes/homonculus/ssh:/home/agent/.ssh:ro
+      - ./volumes/homonculus/gitconfig:/home/agent/.gitconfig:ro
       - ../autogen_agent:/home/agent/autogen_agent:ro
       - ../mcp_servers/discord-mcp:/home/agent/discord-mcp:ro
       - ../vm_cli:/home/agent/vm_cli:ro
+      - ../docker/docker-entrypoint.sh:/home/agent/entrypoint.sh:ro
     environment:
-      - USER=USERNAME
-      - AGENT_TYPE=AGENT_TYPE
+      - USER=homonculus
+      - AGENT_TYPE=autogen
       - DEVCHAT_HOST_IP=host.docker.internal
-      - DISCORD_BOT_TOKEN=${BOT_TOKEN_USERNAME}
+      - DISCORD_BOT_TOKEN=${BOT_TOKEN_homonculus}
       - DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
@@ -44,6 +36,7 @@ services:
     stdin_open: true
     tty: true
     restart: unless-stopped
+    entrypoint: ["/home/agent/entrypoint.sh"]
 
 networks:
   agent-network:
