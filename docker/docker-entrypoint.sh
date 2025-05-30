@@ -61,7 +61,6 @@ DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
 DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
 OPENAI_API_KEY=${OPENAI_API_KEY}
 GEMINI_API_KEYS=${GEMINI_API_KEY}
-ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
 USE_GEMINI=${USE_GEMINI:-true}
 GIT_USERNAME=${GIT_USERNAME}
 GIT_TOKEN=${GITHUB_TOKEN}
@@ -90,7 +89,6 @@ DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
 DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
 OPENAI_API_KEY=${OPENAI_API_KEY}
 GEMINI_API_KEYS=${GEMINI_API_KEY}
-ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
 USE_GEMINI=${USE_GEMINI:-true}
 GIT_USERNAME=${GIT_USERNAME}
 GIT_TOKEN=${GITHUB_TOKEN}
@@ -117,36 +115,14 @@ if [ ! -d "/home/agent/discord-mcp-local" ]; then
     cd /home/agent
 fi
 
-# 3. Setup Claude Code MCP configuration
-echo "Setting up Claude Code MCP configuration..."
-mkdir -p /home/agent/.claude
-if [ ! -f "/home/agent/.claude/mcp-config.json" ] || [ "$AGENT_TYPE" = "claude-code" ]; then
-    echo "Creating MCP configuration for Claude Code..."
-    cat > /home/agent/.claude/mcp-config.json << MCPEOF
-{
-  "mcpServers": {
-    "discord": {
-      "command": "node",
-      "args": ["/home/agent/discord-mcp-local/dist/index.js"],
-      "env": {
-        "DISCORD_BOT_TOKEN": "${DISCORD_BOT_TOKEN}",
-        "DISCORD_CHANNEL_ID": "${DISCORD_CHANNEL_ID}"
-      }
-    }
-  }
-}
-MCPEOF
-    echo "✓ Created MCP configuration for Claude Code"
-fi
-
-# 4. Setup devchat CLI
+# 3. Setup devchat CLI
 echo "Setting up devchat CLI..."
 if ! grep -q "alias devchat" /home/agent/.bashrc 2>/dev/null; then
     echo 'alias devchat="node /home/agent/vm_cli/devchat.js"' >> /home/agent/.bashrc
     echo 'export PATH=/home/agent/.local/bin:$PATH' >> /home/agent/.bashrc
 fi
 
-# 5. Create agent startup scripts
+# 4. Create agent startup scripts
 echo "Creating agent startup scripts..."
 
 # AutoGen startup script
@@ -172,36 +148,7 @@ exec python autogen_discord_bot.py
 EOF
 chmod +x /home/agent/start_autogen.sh
 
-# Claude Code startup script  
-cat > /home/agent/start_claude.sh << 'EOF'
-#!/bin/bash
-echo "Starting Claude Code agent..."
-cd /home/agent/workspace
-
-# Start Discord MCP server in background
-echo "Starting Discord MCP server..."
-cd /home/agent/discord-mcp-local
-npm start &
-MCP_PID=$!
-echo "Discord MCP server started with PID: $MCP_PID"
-
-# Wait for MCP server to be ready
-sleep 3
-
-# Start Claude Code with MCP config
-cd /home/agent/workspace
-if [ -f "/home/agent/.claude/mcp-config.json" ]; then
-    claude --mcp-config "/home/agent/.claude/mcp-config.json"
-else
-    claude
-fi
-
-# Cleanup MCP server on exit
-kill $MCP_PID 2>/dev/null || true
-EOF
-chmod +x /home/agent/start_claude.sh
-
-# 6. Make original AutoGen scripts compatible
+# 5. Make original AutoGen scripts compatible
 echo "Making original AutoGen scripts compatible..."
 cd /home/agent
 
@@ -351,7 +298,6 @@ echo "========================================="
 echo "Container setup complete!"
 echo "Available commands:"
 echo "  /home/agent/start_autogen.sh                    - Start AutoGen agent (simple wrapper)"
-echo "  /home/agent/start_claude.sh                     - Start Claude Code agent"
 echo "  /home/agent/start_agent_fixed.sh                - Start AutoGen agent (fixed original script)"
 echo "  /home/agent/start_agent_wrapper.sh              - Start AutoGen agent (compatible wrapper)"
 echo "  devchat                                         - Send Discord messages"
@@ -361,14 +307,12 @@ echo "  BOT_USER=$BOT_USER"
 echo "  DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:0:20}..."
 echo "========================================="
 
-# Start the appropriate agent based on AGENT_TYPE
-if [ "$AGENT_TYPE" = "autogen" ]; then
+# Start AutoGen agent (only supported agent type)
+if [ "$AGENT_TYPE" = "autogen" ] || [ -z "$AGENT_TYPE" ]; then
     echo "Starting AutoGen agent automatically..."
     exec /home/agent/start_agent_fixed.sh
-elif [ "$AGENT_TYPE" = "claude-code" ]; then
-    echo "Starting Claude Code agent automatically..."
-    exec /home/agent/start_claude.sh
 else
-    echo "Unknown agent type: $AGENT_TYPE"
-    exec /bin/bash
+    echo "Warning: Unknown agent type '$AGENT_TYPE', defaulting to AutoGen"
+    echo "Only 'autogen' agent type is supported in this container"
+    exec /home/agent/start_agent_fixed.sh
 fi

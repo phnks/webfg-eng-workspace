@@ -10,7 +10,6 @@ services:
       - agent-network
     volumes:
       - ./volumes/${USERNAME}/workspace:/home/agent/workspace
-      - ./volumes/${USERNAME}/claude:/home/agent/.claude
       - ./volumes/${USERNAME}/config:/home/agent/.config
       - ./volumes/${USERNAME}/ssh:/home/agent/.ssh:ro
       - ./volumes/${USERNAME}/gitconfig:/home/agent/.gitconfig:ro
@@ -26,7 +25,6 @@ services:
       - DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEYS}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GITHUB_TOKEN=${GITHUB_TOKEN}
       - GIT_USERNAME=${GIT_USERNAME}
       - GIT_TOKEN=${GITHUB_TOKEN}

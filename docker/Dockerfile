@@ -58,9 +58,6 @@ RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /
     && apt-get install -y docker-ce-cli \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Claude Code CLI
-RUN npm install -g @anthropic-ai/claude-code
-
 # Create base directory structure
 RUN mkdir -p /app /workspace /home/agent
 
@@ -87,7 +84,7 @@ RUN if ! getent group $USER_GID >/dev/null 2>&1; then \
     fi \
     && echo "agent ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/agent \
     && chmod 0440 /etc/sudoers.d/agent \
-    && mkdir -p /home/agent/.claude /home/agent/workspace \
+    && mkdir -p /home/agent/workspace \
     && chown -R agent:agent /home/agent
 
 # Copy autogen agent files with proper ownership
@@ -120,60 +117,6 @@ WORKDIR /home/agent
 
 # Run setup script
 RUN AGENT_TYPE=autogen /usr/local/bin/setup_container.sh
-
-# Copy entrypoint script
-COPY --chown=root:root docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN sudo chmod +x /usr/local/bin/docker-entrypoint.sh
-
-# Set entrypoint
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-
-# Stage for Claude Code agent
-FROM base AS claude-code-agent
-
-# Create user for the agent
-ARG USER_UID=1000
-ARG USER_GID=$USER_UID
-
-# Check if user/group with UID/GID already exist and handle accordingly
-RUN if ! getent group $USER_GID >/dev/null 2>&1; then \
-        groupadd --gid $USER_GID agent; \
-    else \
-        groupadd agent; \
-    fi \
-    && if ! getent passwd $USER_UID >/dev/null 2>&1; then \
-        useradd --uid $USER_UID --gid agent -m -s /bin/bash agent; \
-    else \
-        useradd --gid agent -m -s /bin/bash agent; \
-    fi \
-    && echo "agent ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/agent \
-    && chmod 0440 /etc/sudoers.d/agent \
-    && mkdir -p /home/agent/.claude /home/agent/workspace \
-    && chown -R agent:agent /home/agent
-
-# Copy necessary files with proper ownership
-COPY --chown=agent:agent mcp_servers/discord-mcp /home/agent/discord-mcp
-COPY --chown=agent:agent vm_cli /home/agent/vm_cli
-COPY --chown=agent:agent autogen_agent/prompts /home/agent/prompts
-
-# Install Discord MCP dependencies
-WORKDIR /home/agent/discord-mcp
-RUN npm ci && npm run build
-
-# Install devchat CLI
-WORKDIR /home/agent/vm_cli
-RUN npm ci && npm link
-
-# Copy setup script
-COPY --chown=agent:agent docker/scripts/setup_container.sh /usr/local/bin/setup_container.sh
-RUN chmod +x /usr/local/bin/setup_container.sh
-
-# Switch to non-root user
-USER agent
-WORKDIR /home/agent
-
-# Run setup script
-RUN AGENT_TYPE=claude-code /usr/local/bin/setup_container.sh
 
 # Copy entrypoint script
 COPY --chown=root:root docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
