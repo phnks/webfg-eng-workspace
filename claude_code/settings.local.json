@@ -45,17 +45,8 @@
       "Bash(aws appsync list-resolvers:*)",
       "Bash(gh pr view:*)",
       "WebFetch(domain:webfg-gm-app-qa43.phnks.com)",
-      "Bash(rg:*)"
+      "Bash(rg:*)",
+      "mcp__discord__discord_send_message"
     ]
-  },
-  "mcpServers": {
-    "discord": {
-      "command": "node",
-      "args": ["/home/devuser/discord-mcp/dist/index.js"],
-      "env": { "DISCORD_BOT_TOKEN": "YOUR_TOKEN_HERE" }
-    }
-  },
-  "sampling": {
-    "autoApproveServers": ["discord"]
   }
 }

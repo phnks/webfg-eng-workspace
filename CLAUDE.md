@@ -122,3 +122,21 @@ cd autogen_agent
 2. Check autogen bot logs: `cd autogen_agent && ./get_logs.sh`
 3. Verify bot tokens in `.env` files are correct
 4. Test with `devchat @admin "test"` from inside VM
+
+## Development Workflow
+
+1. When you are given a task for this project, the first thing you must ensure is that you have a feature branch for your task. Never work directly on master.
+2. Once you have your feature branch, you must ensure that you have a pull request (PR) for that branch. There can only ever be 1 PR for each branch. You can use the `gh` cli tool to check for PRs to see if one already exists for your feature branch. 
+3. If a PR does not exist for your feature branch create one using the same `gh` cli command.
+
+## Completing a Task
+
+1. In this project, whenever you finish a task, please run the necessary commands in terminal to test your code changes. Depending on the task there may already be test scrpts under `tests` directories that you should reuse if they exist. Or add to if they do not exist
+2. When you have confirmed that your changes are working then do the following
+    1. Update the PR for your feature branch to include any additional code changes you made for this task, use the `gh` cli for this
+    2. On the PR make sure to include a detailed description of all the changes you made and in which files, why you made those changes, and then also describe any uncertainties or issues you encountered. If the PR description already exists make sure to update it and not overwrite what is already there
+    3. Add all files you have made changes to using the `git add` command
+    4. Then commit the files you added by using the `git commit` command, providing a descriptive commit message of what the changes include
+    5. Push your commit using `git push`, confirm that it was pushed successfully
+    6. Then tell the user that the task is complete, and that you added, committed, and pushed the changes successfully. Please provide a link to your PR so that the user can review your code changes
+    7. NOTE: the user isn't always available directly at the computer. This is why you have been given a discord MCP. Make sure to always notify the user via discord otherwise you may have to wait a long time for them to come back to the computer which will affect your ability to complete your task in a timely manner
