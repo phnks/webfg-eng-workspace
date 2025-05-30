@@ -38,9 +38,13 @@ mkdir -p "$DOCKER_DIR/volumes/$USERNAME"/{workspace,claude,config,ssh,autogen_lo
 # Copy SSH keys if they exist
 if [ -d "$HOME/.ssh" ]; then
     echo "Copying SSH keys..."
-    cp -r "$HOME/.ssh" "$DOCKER_DIR/volumes/$USERNAME/ssh/"
-    chmod 700 "$DOCKER_DIR/volumes/$USERNAME/ssh"
-    chmod 600 "$DOCKER_DIR/volumes/$USERNAME/ssh"/*
+    # Copy contents of .ssh directory, not the directory itself
+    cp -r "$HOME/.ssh"/* "$DOCKER_DIR/volumes/$USERNAME/ssh/" 2>/dev/null || true
+    # Only chmod if files were actually copied
+    if [ "$(ls -A "$DOCKER_DIR/volumes/$USERNAME/ssh/" 2>/dev/null)" ]; then
+        chmod 700 "$DOCKER_DIR/volumes/$USERNAME/ssh"
+        chmod 600 "$DOCKER_DIR/volumes/$USERNAME/ssh"/* 2>/dev/null || true
+    fi
 fi
 
 # Copy git config if it exists
@@ -64,8 +68,17 @@ echo "Using environment variables from docker/.env"
 # Store agent type for future use
 echo "$AGENT_TYPE" > "$DOCKER_DIR/volumes/$USERNAME/.agent_type"
 
-# Skip build for now - use existing image
-echo "Using existing Docker image..."
+# Check if Docker image exists
+if ! docker image inspect webfg-quick:latest >/dev/null 2>&1; then
+    echo "Warning: Docker image webfg-quick:latest not found!"
+    echo "Please build the image first by running:"
+    echo "  $SCRIPT_DIR/build_image.sh"
+    echo ""
+    echo "Or you can build it now with: sudo $SCRIPT_DIR/build_image.sh"
+    exit 1
+else
+    echo "Using existing Docker image..."
+fi
 
 # Container will use entrypoint script instead of custom start script
 

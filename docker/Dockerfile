@@ -74,15 +74,26 @@ FROM base AS autogen-agent
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
 
-RUN groupadd --gid $USER_GID agent 2>/dev/null || true \
-    && useradd --uid $USER_UID --gid $USER_GID -m -s /bin/bash agent 2>/dev/null || true \
+# Check if user/group with UID/GID already exist and handle accordingly
+RUN if ! getent group $USER_GID >/dev/null 2>&1; then \
+        groupadd --gid $USER_GID agent; \
+    else \
+        groupadd agent; \
+    fi \
+    && if ! getent passwd $USER_UID >/dev/null 2>&1; then \
+        useradd --uid $USER_UID --gid agent -m -s /bin/bash agent; \
+    else \
+        useradd --gid agent -m -s /bin/bash agent; \
+    fi \
     && echo "agent ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/agent \
-    && chmod 0440 /etc/sudoers.d/agent
+    && chmod 0440 /etc/sudoers.d/agent \
+    && mkdir -p /home/agent/.claude /home/agent/workspace \
+    && chown -R agent:agent /home/agent
 
-# Copy autogen agent files
-COPY autogen_agent /home/agent/autogen_agent
-COPY mcp_servers/discord-mcp /home/agent/discord-mcp
-COPY vm_cli /home/agent/vm_cli
+# Copy autogen agent files with proper ownership
+COPY --chown=agent:agent autogen_agent /home/agent/autogen_agent
+COPY --chown=agent:agent mcp_servers/discord-mcp /home/agent/discord-mcp
+COPY --chown=agent:agent vm_cli /home/agent/vm_cli
 
 # Install Python dependencies
 WORKDIR /home/agent/autogen_agent
@@ -99,14 +110,8 @@ RUN npm ci && npm run build
 WORKDIR /home/agent/vm_cli
 RUN npm ci && npm link
 
-# Create necessary directories
-RUN mkdir -p /home/agent/.claude /home/agent/workspace
-
-# Set ownership
-RUN chown -R agent:agent /home/agent
-
 # Copy setup script
-COPY docker/scripts/setup_container.sh /usr/local/bin/setup_container.sh
+COPY --chown=agent:agent docker/scripts/setup_container.sh /usr/local/bin/setup_container.sh
 RUN chmod +x /usr/local/bin/setup_container.sh
 
 # Switch to non-root user
@@ -117,7 +122,7 @@ WORKDIR /home/agent
 RUN AGENT_TYPE=autogen /usr/local/bin/setup_container.sh
 
 # Copy entrypoint script
-COPY docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY --chown=root:root docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN sudo chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Set entrypoint
@@ -130,15 +135,26 @@ FROM base AS claude-code-agent
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
 
-RUN groupadd --gid $USER_GID agent 2>/dev/null || true \
-    && useradd --uid $USER_UID --gid $USER_GID -m -s /bin/bash agent 2>/dev/null || true \
+# Check if user/group with UID/GID already exist and handle accordingly
+RUN if ! getent group $USER_GID >/dev/null 2>&1; then \
+        groupadd --gid $USER_GID agent; \
+    else \
+        groupadd agent; \
+    fi \
+    && if ! getent passwd $USER_UID >/dev/null 2>&1; then \
+        useradd --uid $USER_UID --gid agent -m -s /bin/bash agent; \
+    else \
+        useradd --gid agent -m -s /bin/bash agent; \
+    fi \
     && echo "agent ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/agent \
-    && chmod 0440 /etc/sudoers.d/agent
+    && chmod 0440 /etc/sudoers.d/agent \
+    && mkdir -p /home/agent/.claude /home/agent/workspace \
+    && chown -R agent:agent /home/agent
 
-# Copy necessary files
-COPY mcp_servers/discord-mcp /home/agent/discord-mcp
-COPY vm_cli /home/agent/vm_cli
-COPY autogen_agent/prompts /home/agent/prompts
+# Copy necessary files with proper ownership
+COPY --chown=agent:agent mcp_servers/discord-mcp /home/agent/discord-mcp
+COPY --chown=agent:agent vm_cli /home/agent/vm_cli
+COPY --chown=agent:agent autogen_agent/prompts /home/agent/prompts
 
 # Install Discord MCP dependencies
 WORKDIR /home/agent/discord-mcp
@@ -148,14 +164,8 @@ RUN npm ci && npm run build
 WORKDIR /home/agent/vm_cli
 RUN npm ci && npm link
 
-# Create necessary directories
-RUN mkdir -p /home/agent/.claude /home/agent/workspace
-
-# Set ownership
-RUN chown -R agent:agent /home/agent
-
 # Copy setup script
-COPY docker/scripts/setup_container.sh /usr/local/bin/setup_container.sh
+COPY --chown=agent:agent docker/scripts/setup_container.sh /usr/local/bin/setup_container.sh
 RUN chmod +x /usr/local/bin/setup_container.sh
 
 # Switch to non-root user
@@ -166,7 +176,7 @@ WORKDIR /home/agent
 RUN AGENT_TYPE=claude-code /usr/local/bin/setup_container.sh
 
 # Copy entrypoint script
-COPY docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY --chown=root:root docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN sudo chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Set entrypoint

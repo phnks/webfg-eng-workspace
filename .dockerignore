@@ -1,0 +1,38 @@
+# Ignore Vagrant files
+.vagrant/
+*.log
+
+# Ignore git files
+.git/
+.gitignore
+
+# Ignore other unnecessary files
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Ignore test results
+docker/test-results.txt
+docker/test/.env.test
+
+# Ignore local environment files
+docker/.env
+host_service/.env
+autogen_agent/.env
+
+# Ignore node_modules (will be installed during build)
+**/node_modules/
+**/.pnpm-store/
+
+# Ignore Python virtual environments
+**/venv/
+**/__pycache__/
+**/*.pyc
+
+# Ignore build artifacts
+**/dist/
+**/build/
+
+# Ignore volumes
+docker/volumes/
