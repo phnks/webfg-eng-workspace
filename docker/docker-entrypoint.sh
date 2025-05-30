@@ -14,9 +14,11 @@ echo "Starting agent container for user: $USER"
 echo "Agent type: $AGENT_TYPE"
 echo "========================================="
 
-# Ensure we're the right user
-if [ "$(whoami)" != "$USER" ]; then
-    echo "Warning: Running as $(whoami), expected $USER"
+# Ensure we're the right user (agent is the container user, USER env var is the original username)
+if [ "$(whoami)" != "agent" ]; then
+    echo "Warning: Running as $(whoami), expected agent user"
+else
+    echo "Running as agent user (container user: $(whoami), original user: $USER)"
 fi
 
 cd /home/agent
@@ -43,9 +45,17 @@ source /home/agent/.venvs/autogen/bin/activate
 pip install --quiet --upgrade pip
 pip install --quiet pyautogen discord.py python-dotenv google-genai vertexai pillow jsonschema ag2[gemini]
 
+# Ensure workspace directory is writable
+echo "Setting up workspace permissions..."
+if [ ! -w "/home/agent/workspace" ]; then
+    echo "Workspace directory is not writable, fixing permissions..."
+    sudo chown -R agent:agent /home/agent/workspace
+    sudo chmod -R 755 /home/agent/workspace
+fi
+
 # Write .env file with container environment variables for AutoGen
 echo "Setting up environment variables for AutoGen..."
-cat > /home/agent/workspace/.env << EOF
+if ! cat > /home/agent/workspace/.env << EOF
 # Container environment variables
 DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
 DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
@@ -64,8 +74,37 @@ AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}
 BOT_USER=${BOT_USER:-agent}
 AGENT_HOME=${AGENT_HOME:-/home/agent/autogen_agent}
 EOF
-
-echo "Created .env file with environment variables"
+then
+    echo "✓ Created .env file with environment variables"
+else
+    echo "✗ Failed to create .env file - permission issue persists"
+    echo "Workspace permissions:"
+    ls -la /home/agent/workspace/
+    echo "Attempting to create file manually with different permissions..."
+    sudo touch /home/agent/workspace/.env
+    sudo chown agent:agent /home/agent/workspace/.env
+    sudo chmod 644 /home/agent/workspace/.env
+    cat > /home/agent/workspace/.env << EOFILE
+# Container environment variables
+DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
+OPENAI_API_KEY=${OPENAI_API_KEY}
+GEMINI_API_KEYS=${GEMINI_API_KEY}
+ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+USE_GEMINI=${USE_GEMINI:-true}
+GIT_USERNAME=${GIT_USERNAME}
+GIT_TOKEN=${GITHUB_TOKEN}
+GH_TOKEN=${GITHUB_TOKEN}
+AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+AWS_REGION=${AWS_DEFAULT_REGION}
+AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}
+BOT_USER=${BOT_USER:-agent}
+AGENT_HOME=${AGENT_HOME:-/home/agent/autogen_agent}
+EOFILE
+    echo "✓ Created .env file using sudo permissions"
+fi
 
 # 2. Setup Discord MCP in writable location
 echo "Setting up Discord MCP..."
