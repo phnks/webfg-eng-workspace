@@ -117,14 +117,36 @@ if [ ! -d "/home/agent/discord-mcp-local" ]; then
     cd /home/agent
 fi
 
-# 3. Setup devchat CLI
+# 3. Setup Claude Code MCP configuration
+echo "Setting up Claude Code MCP configuration..."
+mkdir -p /home/agent/.claude
+if [ ! -f "/home/agent/.claude/mcp-config.json" ] || [ "$AGENT_TYPE" = "claude-code" ]; then
+    echo "Creating MCP configuration for Claude Code..."
+    cat > /home/agent/.claude/mcp-config.json << MCPEOF
+{
+  "mcpServers": {
+    "discord": {
+      "command": "node",
+      "args": ["/home/agent/discord-mcp-local/dist/index.js"],
+      "env": {
+        "DISCORD_BOT_TOKEN": "${DISCORD_BOT_TOKEN}",
+        "DISCORD_CHANNEL_ID": "${DISCORD_CHANNEL_ID}"
+      }
+    }
+  }
+}
+MCPEOF
+    echo "✓ Created MCP configuration for Claude Code"
+fi
+
+# 4. Setup devchat CLI
 echo "Setting up devchat CLI..."
 if ! grep -q "alias devchat" /home/agent/.bashrc 2>/dev/null; then
     echo 'alias devchat="node /home/agent/vm_cli/devchat.js"' >> /home/agent/.bashrc
     echo 'export PATH=/home/agent/.local/bin:$PATH' >> /home/agent/.bashrc
 fi
 
-# 4. Create agent startup scripts
+# 5. Create agent startup scripts
 echo "Creating agent startup scripts..."
 
 # AutoGen startup script
@@ -179,7 +201,7 @@ kill $MCP_PID 2>/dev/null || true
 EOF
 chmod +x /home/agent/start_claude.sh
 
-# 5. Make original AutoGen scripts compatible
+# 6. Make original AutoGen scripts compatible
 echo "Making original AutoGen scripts compatible..."
 cd /home/agent
 
