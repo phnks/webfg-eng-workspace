@@ -5,13 +5,11 @@ set -e
 
 # Set environment variables
 export USER=${USER:-agent}
-export AGENT_TYPE=${AGENT_TYPE:-autogen}
 export AGENT_HOME=/home/agent/autogen_agent
 export BOT_USER=agent
 
 echo "========================================="
-echo "Starting agent container for user: $USER"
-echo "Agent type: $AGENT_TYPE"
+echo "Starting AutoGen agent container for user: $USER"
 echo "========================================="
 
 # Ensure we're the right user (agent is the container user, USER env var is the original username)
@@ -115,14 +113,7 @@ if [ ! -d "/home/agent/discord-mcp-local" ]; then
     cd /home/agent
 fi
 
-# 3. Setup devchat CLI
-echo "Setting up devchat CLI..."
-if ! grep -q "alias devchat" /home/agent/.bashrc 2>/dev/null; then
-    echo 'alias devchat="node /home/agent/vm_cli/devchat.js"' >> /home/agent/.bashrc
-    echo 'export PATH=/home/agent/.local/bin:$PATH' >> /home/agent/.bashrc
-fi
-
-# 4. Create agent startup scripts
+# 3. Create agent startup scripts
 echo "Creating agent startup scripts..."
 
 # AutoGen startup script
@@ -300,19 +291,12 @@ echo "Available commands:"
 echo "  /home/agent/start_autogen.sh                    - Start AutoGen agent (simple wrapper)"
 echo "  /home/agent/start_agent_fixed.sh                - Start AutoGen agent (fixed original script)"
 echo "  /home/agent/start_agent_wrapper.sh              - Start AutoGen agent (compatible wrapper)"
-echo "  devchat                                         - Send Discord messages"
 echo "Environment variables set:"
 echo "  AGENT_HOME=$AGENT_HOME"
 echo "  BOT_USER=$BOT_USER"
 echo "  DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:0:20}..."
 echo "========================================="
 
-# Start AutoGen agent (only supported agent type)
-if [ "$AGENT_TYPE" = "autogen" ] || [ -z "$AGENT_TYPE" ]; then
-    echo "Starting AutoGen agent automatically..."
-    exec /home/agent/start_agent_fixed.sh
-else
-    echo "Warning: Unknown agent type '$AGENT_TYPE', defaulting to AutoGen"
-    echo "Only 'autogen' agent type is supported in this container"
-    exec /home/agent/start_agent_fixed.sh
-fi
+# Start AutoGen agent
+echo "Starting AutoGen agent automatically..."
+exec /home/agent/start_agent_fixed.sh

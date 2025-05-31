@@ -3,8 +3,8 @@
 # Script to destroy VMs for all users listed in a config file.
 # Uses the destroy_vm.sh script.
 
-CONFIG_FILE="config/dev_users.txt"
-DESTROY_SCRIPT="./host_scripts/destroy_vm.sh"
+CONFIG_FILE="../../config/dev_users.txt"
+DESTROY_SCRIPT="./destroy_vm.sh"
 
 # Check if config file exists
 if [ ! -f "$CONFIG_FILE" ]; then

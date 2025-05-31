@@ -23,7 +23,7 @@ if DEV_USERNAME="$DEV_USERNAME" sudo -E vagrant up "$DEV_USERNAME" --provider=vi
   echo "VM for '$DEV_USERNAME' is running."
 else
   echo "Error: Failed to start VM for '$DEV_USERNAME' using 'vagrant up'."
-  echo "Ensure the VM was created first using './host_scripts/provision_vm.sh $DEV_USERNAME'."
+  echo "Ensure the VM was created first using './provision_vm.sh $DEV_USERNAME'."
   exit 1
 fi
 

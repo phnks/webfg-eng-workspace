@@ -54,7 +54,7 @@ elif [ "$VM_STATE" == "saved" ]; then
   echo "VM is already suspended (saved state)."
 else
   echo "Error: VM is not running or saved (state: '$VM_STATE'). Cannot restart via suspend/resume."
-  echo "Use './host_scripts/start_vm.sh $DEV_USERNAME' or './host_scripts/restart_vm.sh $DEV_USERNAME' instead."
+  echo "Use './start_vm.sh $DEV_USERNAME' or './restart_vm.sh $DEV_USERNAME' instead."
   exit 1
 fi
 

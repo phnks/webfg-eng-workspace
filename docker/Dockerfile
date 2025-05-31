@@ -90,7 +90,6 @@ RUN if ! getent group $USER_GID >/dev/null 2>&1; then \
 # Copy autogen agent files with proper ownership
 COPY --chown=agent:agent autogen_agent /home/agent/autogen_agent
 COPY --chown=agent:agent mcp_servers/discord-mcp /home/agent/discord-mcp
-COPY --chown=agent:agent vm_cli /home/agent/vm_cli
 
 # Install Python dependencies
 WORKDIR /home/agent/autogen_agent
@@ -102,10 +101,6 @@ RUN python3 -m venv venv \
 # Install Discord MCP dependencies
 WORKDIR /home/agent/discord-mcp
 RUN npm ci && npm run build
-
-# Install devchat CLI
-WORKDIR /home/agent/vm_cli
-RUN npm ci && npm link
 
 # Copy setup script
 COPY --chown=agent:agent docker/scripts/setup_container.sh /usr/local/bin/setup_container.sh

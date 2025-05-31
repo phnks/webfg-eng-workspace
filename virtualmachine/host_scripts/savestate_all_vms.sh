@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Script to start/resume VMs for all users listed in the config file.
+# Script to save the state of VMs for all users listed in the config file.
 # Allows continuing to next user if one fails.
 
-CONFIG_FILE="config/dev_users.txt"
-START_SCRIPT="./host_scripts/start_vm.sh"
+CONFIG_FILE="../../config/dev_users.txt"
+SAVESTATE_SCRIPT="./savestate_vm.sh"
 
 # Check if config file exists
 if [ ! -f "$CONFIG_FILE" ]; then
@@ -13,12 +13,12 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 # Check if helper script exists and is executable
-if [ ! -x "$START_SCRIPT" ]; then
-    echo "Error: Start script '$START_SCRIPT' not found or not executable."
+if [ ! -x "$SAVESTATE_SCRIPT" ]; then
+    echo "Error: Save state script '$SAVESTATE_SCRIPT' not found or not executable."
     exit 1
 fi
 
-echo ">>> Starting/Resuming VMs for users in '$CONFIG_FILE'..."
+echo ">>> Saving state for VMs of users in '$CONFIG_FILE'..."
 echo "--------------------------------------------------"
 
 SUCCESS_COUNT=0
@@ -35,12 +35,12 @@ grep -v '^#' "$CONFIG_FILE" | grep -v '^[[:space:]]*$' | while IFS= read -r USER
 
   echo ">>> Processing user: $USERNAME"
 
-  # Attempt to start/resume the VM using the start_vm.sh script (which now uses vagrant up)
-  if "$START_SCRIPT" "$USERNAME"; then
-    echo "Start/Resume command finished for '$USERNAME'."
+  # Attempt to save the VM state using the savestate_vm.sh script (which now uses vagrant suspend)
+  if "$SAVESTATE_SCRIPT" "$USERNAME"; then
+    echo "Save state command finished for '$USERNAME'."
     SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
   else
-    echo "Error: Failed to start/resume VM for user '$USERNAME'."
+    echo "Error: Failed to save state for VM of user '$USERNAME'."
     FAIL_COUNT=$((FAIL_COUNT + 1))
   fi
   echo "--------------------------------------------------"

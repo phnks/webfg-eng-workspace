@@ -3,8 +3,8 @@
 # Script to gracefully stop VMs for all users listed in the config file.
 # Allows continuing to next user if one fails.
 
-CONFIG_FILE="config/dev_users.txt"
-STOP_SCRIPT="./host_scripts/stop_vm.sh"
+CONFIG_FILE="../../config/dev_users.txt"
+STOP_SCRIPT="./stop_vm.sh"
 
 # Check if config file exists
 if [ ! -f "$CONFIG_FILE" ]; then

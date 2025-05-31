@@ -2,8 +2,8 @@
 
 # Script to restart the host_service Node.js application.
 
-STOP_SCRIPT="./host_scripts/stop_host_service.sh"
-START_SCRIPT="./host_scripts/start_host_service.sh"
+STOP_SCRIPT="./stop_host_service.sh"
+START_SCRIPT="./start_host_service.sh"
 
 echo ">>> Attempting to restart host_service..."
 

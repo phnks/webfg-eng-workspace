@@ -4,8 +4,8 @@
 # Uses the unified provision_vm.sh script.
 # Allows continuing to next user if one fails.
 
-CONFIG_FILE="config/dev_users.txt"
-PROVISION_SCRIPT="./host_scripts/provision_vm.sh"
+CONFIG_FILE="../../config/dev_users.txt"
+PROVISION_SCRIPT="./provision_vm.sh"
 
 # Check if config file exists
 if [ ! -f "$CONFIG_FILE" ]; then

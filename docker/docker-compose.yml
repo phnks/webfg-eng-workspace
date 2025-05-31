@@ -1,5 +1,5 @@
-# Dynamic Docker Compose configuration for agent containers
-# Uses environment variables: USERNAME and AGENT_TYPE
+# Dynamic Docker Compose configuration for AutoGen agent containers
+# Uses environment variable: USERNAME
 
 services:
   agent:
@@ -15,12 +15,9 @@ services:
       - ./volumes/${USERNAME}/gitconfig:/home/agent/.gitconfig:ro
       - ../autogen_agent:/home/agent/autogen_agent:ro
       - ../mcp_servers/discord-mcp:/home/agent/discord-mcp:ro
-      - ../vm_cli:/home/agent/vm_cli:ro
       - ./docker-entrypoint.sh:/home/agent/entrypoint.sh:ro
     environment:
       - USER=${USERNAME}
-      - AGENT_TYPE=${AGENT_TYPE}
-      - DEVCHAT_HOST_IP=host.docker.internal
       - DISCORD_BOT_TOKEN=${BOT_TOKEN}
       - DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
       - OPENAI_API_KEY=${OPENAI_API_KEY}

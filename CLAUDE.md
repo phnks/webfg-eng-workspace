@@ -16,26 +16,19 @@ This is a VM management system that creates isolated Ubuntu development environm
 ### VM Management
 ```bash
 # Provision/update a developer VM
-./host_scripts/provision_vm.sh <username>
+./virtualmachine/host_scripts/provision_vm.sh <username>
 
 # Start/stop/restart VMs
-./host_scripts/start_vm.sh <username>
-./host_scripts/stop_vm.sh <username>
-./host_scripts/restart_vm.sh <username>
+./virtualmachine/host_scripts/start_vm.sh <username>
+./virtualmachine/host_scripts/stop_vm.sh <username>
+./virtualmachine/host_scripts/restart_vm.sh <username>
 
 # Manage all VMs at once
-./host_scripts/start_all_vms.sh
-./host_scripts/stop_all_vms.sh
-./host_scripts/savestate_all_vms.sh
+./virtualmachine/host_scripts/start_all_vms.sh
+./virtualmachine/host_scripts/stop_all_vms.sh
+./virtualmachine/host_scripts/savestate_all_vms.sh
 ```
 
-### Host Service
-```bash
-# Start the host service (required for Discord communication)
-cd host_service
-npm install  # First time only
-npm start    # Or use ./host_scripts/start_host_service.sh
-```
 
 ### Autogen Agent
 ```bash
@@ -58,39 +51,27 @@ npm install
 npm run build
 ```
 
-### VM Internal Commands
-```bash
-# Send message from VM to admin (inside VM)
-devchat @admin "Your message here"
-```
 
 ## Architecture
 
 ### Communication Flow
-1. Developer in VM uses `devchat` → sends HTTP request to host service
-2. Host service authenticates request and forwards to Discord using bot token
-3. Admin/AI replies in Discord → host service receives via bot
-4. Host service notifies VM via WebSocket → `devchat` displays response
+1. AutoGen agent connects directly to Discord using bot token
+2. Admin/AI replies in Discord → agent receives via Discord API
+3. MCP (Model Context Protocol) servers provide additional integrations
 
 ### Security Model
-- Each developer has a dedicated Discord bot (token stored on host only)
-- VMs authenticate to host service using their hostname
-- Bot tokens never exposed to VMs
-- All VM-to-Discord communication proxied through host service
+- Each developer has a dedicated Discord bot token
+- Bot tokens configured via environment variables in containers/VMs
+- Direct Discord API communication for reliable message delivery
 
 ### Key Files
 - `config/dev_users.txt`: List of developer usernames (one per line)
-- `host_service/.env`: Discord bot tokens (BOT_TOKEN_USERNAME=token)
+- `docker/.env`: Discord bot tokens and environment variables (BOT_TOKEN_USERNAME=token)
 - `autogen_agent/.env`: AI service credentials and Discord app token
-- `Vagrantfile`: VM configuration and provisioning logic
+- `virtualmachine/Vagrantfile`: VM configuration and provisioning logic
 
 ## Testing
 
-### Host Service
-```bash
-cd host_service
-# No automated tests - manual testing via Discord interactions
-```
 
 ### Autogen Agent
 ```bash
@@ -102,7 +83,7 @@ cd autogen_agent
 ### VM Provisioning
 ```bash
 # Test VM creation and setup
-./host_scripts/provision_vm.sh testuser
+./virtualmachine/host_scripts/provision_vm.sh testuser
 # Verify VM boots and has all tools installed
 ```
 
@@ -110,18 +91,18 @@ cd autogen_agent
 
 ### Adding a New Developer
 1. Add username to `config/dev_users.txt`
-2. Create Discord bot application and add token to `host_service/.env`
-3. Run `./host_scripts/provision_vm.sh <username>`
+2. Create Discord bot application and add token to `docker/.env`
+3. Run `./virtualmachine/host_scripts/provision_vm.sh <username>` for VMs or `./docker/scripts/provision_container.sh <username>` for containers
 
 ### Updating VM Software
-1. Edit provisioning script in `Vagrantfile`
-2. Run `./host_scripts/provision_all_vms.sh` to update all VMs
+1. Edit provisioning script in `virtualmachine/Vagrantfile`
+2. Run `./virtualmachine/host_scripts/provision_all_vms.sh` to update all VMs
 
 ### Debugging Discord Communication
-1. Check host service logs: `cd host_service && npm start`
-2. Check autogen bot logs: `cd autogen_agent && ./get_logs.sh`
+1. Check autogen bot logs: `cd autogen_agent && ./get_logs.sh`
+2. Check container logs: `docker logs agent-<username>`
 3. Verify bot tokens in `.env` files are correct
-4. Test with `devchat @admin "test"` from inside VM
+4. Test by sending messages directly in Discord to the bot
 
 ## Development Workflow
 
