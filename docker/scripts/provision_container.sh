@@ -5,25 +5,17 @@
 
 set -e
 
-if [ $# -ne 2 ]; then
-    echo "Usage: $0 <username> <agent_type>"
-    echo "agent_type: autogen or claude-code"
+if [ $# -ne 1 ]; then
+    echo "Usage: $0 <username>"
     exit 1
 fi
 
 USERNAME=$1
-AGENT_TYPE=$2
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$( cd "$SCRIPT_DIR/../.." && pwd )"
 DOCKER_DIR="$PROJECT_ROOT/docker"
 
-echo "Provisioning Docker container for user: $USERNAME with agent type: $AGENT_TYPE"
-
-# Validate agent type
-if [[ "$AGENT_TYPE" != "autogen" && "$AGENT_TYPE" != "claude-code" ]]; then
-    echo "Error: agent_type must be 'autogen' or 'claude-code'"
-    exit 1
-fi
+echo "Provisioning AutoGen Docker container for user: $USERNAME"
 
 # Check if user is in dev_users.txt
 if ! grep -q "^${USERNAME}$" "$PROJECT_ROOT/config/dev_users.txt"; then
@@ -33,7 +25,7 @@ fi
 
 # Create volumes directories
 echo "Creating volume directories..."
-mkdir -p "$DOCKER_DIR/volumes/$USERNAME"/{workspace,claude,config,ssh,autogen_logs}
+mkdir -p "$DOCKER_DIR/volumes/$USERNAME"/{workspace,config,ssh,autogen_logs}
 
 # Copy SSH keys if they exist
 if [ -d "$HOME/.ssh" ]; then
@@ -65,8 +57,8 @@ fi
 # Don't export environment variables - docker-compose will use --env-file
 echo "Using environment variables from docker/.env"
 
-# Store agent type for future use
-echo "$AGENT_TYPE" > "$DOCKER_DIR/volumes/$USERNAME/.agent_type"
+# Store agent type for future use (always autogen now)
+echo "autogen" > "$DOCKER_DIR/volumes/$USERNAME/.agent_type"
 
 # Check if Docker image exists
 if ! docker image inspect webfg-quick:latest >/dev/null 2>&1; then
@@ -82,24 +74,7 @@ fi
 
 # Container will use entrypoint script instead of custom start script
 
-# Create MCP config for Claude Code
-if [ "$AGENT_TYPE" = "claude-code" ]; then
-    mkdir -p "$DOCKER_DIR/volumes/$USERNAME/claude"
-    cat > "$DOCKER_DIR/volumes/$USERNAME/claude/mcp-config.json" << EOF
-{
-  "servers": {
-    "discord": {
-      "command": "node",
-      "args": ["/home/$USERNAME/discord-mcp/dist/index.js"],
-      "env": {
-        "DISCORD_BOT_TOKEN": "\${BOT_TOKEN_$USERNAME}",
-        "DISCORD_CHANNEL_ID": "\${DISCORD_CHANNEL_ID}"
-      }
-    }
-  }
-}
-EOF
-fi
+# Container will use AutoGen agent exclusively - no additional config needed
 
 echo "Container provisioning complete for $USERNAME"
 echo ""

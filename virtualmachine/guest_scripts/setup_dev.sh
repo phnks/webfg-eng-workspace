@@ -171,14 +171,6 @@ else
         echo "Warning: google-chrome.desktop not found. Cannot set default browser."
     fi
 
-    # --- Set Environment Variables for User ---
-    echo "Setting DEVCHAT_HOST_IP environment variable in /home/$USERNAME/.bashrc ..."
-    # Append the export command to the user's .bashrc
-    echo '' >> "/home/$USERNAME/.bashrc" # Add a newline for separation
-    echo '# Set IP for host service communication' >> "/home/$USERNAME/.bashrc"
-    echo 'export DEVCHAT_HOST_IP=10.0.2.2' >> "/home/$USERNAME/.bashrc"
-    # Ensure the file is owned by the user
-    chown "$USERNAME:$USERNAME" "/home/$USERNAME/.bashrc"
 
 fi
 
@@ -238,7 +230,7 @@ if [ -f "/home/$USERNAME/.bashrc" ]; then
 
         # --- Generate VM-specific .env file ---
         echo "Generating VM-specific .env file for $USERNAME..."
-        HOST_ENV_FILE="/vagrant/host_service/.env"
+        HOST_ENV_FILE="/vagrant/docker/.env"
         VM_ENV_FILE="$AGENT_HOME_DIR_VM/.env"
 
         # Declare variables to hold extracted values
@@ -492,16 +484,6 @@ WantedBy=multi-user.target"
 
     # Removed the direct start command: sudo -i -u "$USERNAME" $AGENT_START_SCRIPT ...
 
-    # Check if the DEVCHAT_HOST_IP line already exists to avoid duplicates
-    if ! grep -q 'export DEVCHAT_HOST_IP=10.0.2.2' "/home/$USERNAME/.bashrc"; then
-        echo "Setting DEVCHAT_HOST_IP environment variable in /home/$USERNAME/.bashrc ..."
-        echo '' >> "/home/$USERNAME/.bashrc" # Add a newline for separation
-        echo '# Set IP for host service communication' >> "/home/$USERNAME/.bashrc"
-        echo 'export DEVCHAT_HOST_IP=10.0.2.2' >> "/home/$USERNAME/.bashrc"
-        # Ownership should be correct if user exists or was just created
-    else
-         echo "DEVCHAT_HOST_IP already set in /home/$USERNAME/.bashrc."
-    fi
 else
     echo "Warning: /home/$USERNAME/.bashrc not found. Cannot set user env variables."
 fi
@@ -528,56 +510,7 @@ else
      echo "npm already installed: $(npm -v)"
 fi
 
-# --- Install Claude Code ---
-echo ">>> Installing Claude Code CLI globally..."
-if command -v npm &> /dev/null; then
-    npm install -g @anthropic-ai/claude-code || echo "Warning: Failed to install @anthropic-ai/claude-code globally."
-    echo "Claude Code CLI installation attempted."
 
-    # --- Copy Claude Code configuration files ---
-    echo ">>> Copying Claude Code configuration files for user $USERNAME..."
-    CLAUDE_CONFIG_SOURCE_DIR="/vagrant/claude_code" # Assuming /vagrant is the synced folder
-    CLAUDE_CONFIG_DEST_DIR="/home/$USERNAME/.claude"
-
-    if [ -d "$CLAUDE_CONFIG_SOURCE_DIR" ]; then
-        # Create destination directory as the user
-        sudo -i -u "$USERNAME" bash -c "mkdir -p '$CLAUDE_CONFIG_DEST_DIR'" || echo "Warning: Failed to create $CLAUDE_CONFIG_DEST_DIR"
-
-        # Copy files as root then change ownership, or copy as user if possible
-        # Copying as root and then chown-ing is generally safer for permissions.
-        echo "Copying files from $CLAUDE_CONFIG_SOURCE_DIR to $CLAUDE_CONFIG_DEST_DIR..."
-        cp -r "$CLAUDE_CONFIG_SOURCE_DIR"/* "$CLAUDE_CONFIG_DEST_DIR/" || echo "Warning: Failed to copy files to $CLAUDE_CONFIG_DEST_DIR"
-        
-        echo "Setting ownership of $CLAUDE_CONFIG_DEST_DIR for user $USERNAME..."
-        chown -R "$USERNAME:$USERNAME" "$CLAUDE_CONFIG_DEST_DIR" || echo "Warning: Failed to chown $CLAUDE_CONFIG_DEST_DIR"
-        echo "Claude Code configuration files copied."
-    else
-        echo "Warning: Claude Code source directory $CLAUDE_CONFIG_SOURCE_DIR not found. Skipping configuration copy."
-    fi
-else
-    echo "Warning: npm not found, cannot install Claude Code CLI or copy config."
-fi
-
-# --- Install devchat CLI tool ---
-echo ">>> Installing devchat CLI tool wrapper..."
-# Create a wrapper script in /usr/local/bin that executes the actual script
-# from its source directory (/vagrant/vm_cli) so node_modules are found.
-DEVCHAT_SOURCE_DIR="/vagrant/vm_cli" # Assuming default synced folder
-DEVCHAT_SCRIPT="devchat.js"
-DEVCHAT_WRAPPER="/usr/local/bin/devchat"
-
-if [ -f "${DEVCHAT_SOURCE_DIR}/${DEVCHAT_SCRIPT}" ]; then
-    # Create the wrapper script content
-    WRAPPER_CONTENT="#!/bin/bash\n# Wrapper for devchat CLI\ncd \"${DEVCHAT_SOURCE_DIR}\" || exit 1\nexec node \"${DEVCHAT_SCRIPT}\" \"\$@\""
-
-    # Write the wrapper script
-    echo -e "${WRAPPER_CONTENT}" > "${DEVCHAT_WRAPPER}"
-    chmod +x "${DEVCHAT_WRAPPER}"
-    echo "devchat wrapper installed to ${DEVCHAT_WRAPPER}"
-else
-    echo "Warning: ${DEVCHAT_SOURCE_DIR}/${DEVCHAT_SCRIPT} not found. Cannot install devchat tool."
-    echo "Ensure the vm_cli directory is present in the project root and synced."
-fi
 
 # --- Setup Discord MCP Server ---
 echo ">>> Setting up Discord MCP Server for user $USERNAME..."
