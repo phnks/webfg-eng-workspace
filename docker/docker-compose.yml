@@ -3,7 +3,7 @@
 
 services:
   agent:
-    image: webfg-quick:latest
+    image: webfg-eng-autogen:latest
     container_name: agent-${USERNAME}
     hostname: ${USERNAME}
     networks:

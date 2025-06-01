@@ -61,8 +61,8 @@ echo "Using environment variables from docker/.env"
 echo "autogen" > "$DOCKER_DIR/volumes/$USERNAME/.agent_type"
 
 # Check if Docker image exists
-if ! docker image inspect webfg-quick:latest >/dev/null 2>&1; then
-    echo "Warning: Docker image webfg-quick:latest not found!"
+if ! docker image inspect webfg-eng-autogen:latest >/dev/null 2>&1; then
+    echo "Warning: Docker image webfg-eng-autogen:latest not found!"
     echo "Please build the image first by running:"
     echo "  $SCRIPT_DIR/build_image.sh"
     echo ""

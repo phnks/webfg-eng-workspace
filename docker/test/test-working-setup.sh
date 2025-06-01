@@ -14,7 +14,7 @@ version: '3.8'
 
 services:
   agent-test:
-    image: webfg-quick:latest
+    image: webfg-eng-autogen:latest
     container_name: agent-test
     hostname: test
     networks:

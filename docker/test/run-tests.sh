@@ -25,7 +25,7 @@ docker network create agent-network 2>/dev/null || true
 
 # Test 1: Container lifecycle
 log_test "Test 1: Testing container lifecycle..."
-docker run -d --name test-container --network agent-network webfg-quick:latest sleep 3600
+docker run -d --name test-container --network agent-network webfg-eng-autogen:latest sleep 3600
 sleep 2
 
 if docker ps | grep test-container; then
@@ -51,7 +51,7 @@ docker rm -f test-container
 docker run -d --name test-container \
     -v $(pwd)/volumes/test/workspace:/home/agent/workspace \
     --network agent-network \
-    webfg-quick:latest sleep 3600
+    webfg-eng-autogen:latest sleep 3600
 
 sleep 2
 
@@ -66,14 +66,12 @@ log_test -e "\nTest 4: Testing environment variables..."
 docker rm -f test-container
 docker run -d --name test-container \
     -e USER=agent \
-    -e AGENT_TYPE=autogen \
-    -e DEVCHAT_HOST_IP=host.docker.internal \
     --network agent-network \
-    webfg-quick:latest sleep 3600
+    webfg-eng-autogen:latest sleep 3600
 
 sleep 2
 
-if docker exec test-container printenv | grep -q "AGENT_TYPE=autogen"; then
+if docker exec test-container printenv | grep -q "USER=agent"; then
     log_test "✓ Environment variables work"
 else
     log_test "✗ Environment variables failed"
@@ -101,7 +99,7 @@ EOF
 sed -i 's/dockerfile: docker\/Dockerfile/dockerfile: docker\/Dockerfile.quick/g' scripts/provision_container.sh 2>/dev/null || true
 
 # Test provision
-if ./scripts/provision_container.sh dockertest autogen >/dev/null 2>&1; then
+if ./scripts/provision_container.sh dockertest >/dev/null 2>&1; then
     log_test "✓ Provision script works"
 else
     log_test "✗ Provision script failed"

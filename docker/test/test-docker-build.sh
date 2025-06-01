@@ -52,7 +52,7 @@ cd "$PROJECT_ROOT"
 if docker build \
     -f "$DOCKER_DIR/Dockerfile" \
     --target autogen-agent \
-    -t webfg-quick:autogen-test \
+    -t webfg-eng-autogen:test \
     . >/dev/null 2>&1; then
     print_result "Docker build autogen stage" 0
 else
@@ -60,43 +60,24 @@ else
     docker build \
         -f "$DOCKER_DIR/Dockerfile" \
         --target autogen-agent \
-        -t webfg-quick:autogen-test \
+        -t webfg-eng-autogen:test \
         .
     print_result "Docker build autogen stage" 1
 fi
 
-# Test 4: Build the Docker image (claude-code stage)
+# Test 4: Verify agent user was created properly in the image
 echo ""
-echo "Test 4: Building Docker image (claude-code stage)..."
-if docker build \
-    -f "$DOCKER_DIR/Dockerfile" \
-    --target claude-code-agent \
-    -t webfg-quick:claude-code-test \
-    . >/dev/null 2>&1; then
-    print_result "Docker build claude-code stage" 0
-else
-    echo "Build failed. Running with verbose output:"
-    docker build \
-        -f "$DOCKER_DIR/Dockerfile" \
-        --target claude-code-agent \
-        -t webfg-quick:claude-code-test \
-        .
-    print_result "Docker build claude-code stage" 1
-fi
-
-# Test 5: Verify agent user was created properly in the image
-echo ""
-echo "Test 5: Verifying agent user in Docker image..."
-if docker run --rm webfg-quick:autogen-test id agent >/dev/null 2>&1; then
+echo "Test 4: Verifying agent user in Docker image..."
+if docker run --rm webfg-eng-autogen:test id agent >/dev/null 2>&1; then
     print_result "Agent user exists in image" 0
 else
     print_result "Agent user exists in image" 1
 fi
 
-# Test 6: Verify directories were created
+# Test 5: Verify directories were created
 echo ""
-echo "Test 6: Verifying directories in Docker image..."
-if docker run --rm webfg-quick:autogen-test ls -la /home/agent/.claude >/dev/null 2>&1; then
+echo "Test 5: Verifying directories in Docker image..."
+if docker run --rm webfg-eng-autogen:test ls -la /home/agent/workspace >/dev/null 2>&1; then
     print_result "Required directories exist in image" 0
 else
     print_result "Required directories exist in image" 1
@@ -105,7 +86,7 @@ fi
 # Clean up test images
 echo ""
 echo "Cleaning up test images..."
-docker rmi webfg-quick:autogen-test webfg-quick:claude-code-test >/dev/null 2>&1 || true
+docker rmi webfg-eng-autogen:test >/dev/null 2>&1 || true
 
 echo ""
 echo "=== All Docker build tests passed! ==="
