@@ -13,7 +13,7 @@ USERNAME=$1
 DEV_USERNAME=$1
 VM_NAME="dev-${DEV_USERNAME}-vm" # Used for messaging
 
-# Function to clean up orphaned VirtualBox VMs
+# Function to clean up orphaned VirtualBox VMs and Vagrant cache
 cleanup_virtualbox_vm() {
   echo ">>> Checking for orphaned VirtualBox VM '$VM_NAME'..."
   
@@ -32,15 +32,145 @@ cleanup_virtualbox_vm() {
     echo "Removing VirtualBox VM '$VM_NAME'..."
     if VBoxManage unregistervm "$VM_NAME" --delete; then
       echo "✓ Successfully removed VirtualBox VM '$VM_NAME'"
-      exit 0
     else
       echo "Warning: Failed to remove VirtualBox VM '$VM_NAME' by name."
       echo "You may need to manually remove it using VirtualBox Manager GUI."
       exit 1
     fi
   else
-    echo "No VirtualBox VM named '$VM_NAME' found. Cleanup complete."
-    exit 0
+    echo "No VirtualBox VM named '$VM_NAME' found in VirtualBox."
+  fi
+  
+  # Clean up Vagrant global status cache for this VM name
+  echo ">>> Cleaning up Vagrant global status cache..."
+  cleanup_vagrant_cache
+  
+  # Clean up local .vagrant directory if it exists
+  echo ">>> Cleaning up local Vagrant state..."
+  cleanup_local_vagrant_state
+  
+  echo "✓ Cleanup complete."
+  exit 0
+}
+
+# Function to clean up Vagrant global status cache
+cleanup_vagrant_cache() {
+  echo "Checking Vagrant global status for stale '$DEV_USERNAME' entries..."
+  
+  # Get all global status entries for this username (may be multiple from different directories)
+  GLOBAL_ENTRIES=$(DEV_USERNAME="$DEV_USERNAME" vagrant global-status 2>/dev/null | grep "$DEV_USERNAME" | awk '{print $1}' || true)
+  
+  if [ -n "$GLOBAL_ENTRIES" ]; then
+    echo "Found Vagrant global status entries for '$DEV_USERNAME':"
+    echo "$GLOBAL_ENTRIES"
+    
+    # Try to destroy each entry
+    for ENTRY_ID in $GLOBAL_ENTRIES; do
+      echo "Attempting to clean up Vagrant entry: $ENTRY_ID"
+      
+      # Try normal destroy first (without DEV_USERNAME since we're using global ID)
+      if vagrant destroy "$ENTRY_ID" -f 2>/dev/null; then
+        echo "✓ Cleaned up Vagrant entry: $ENTRY_ID"
+      else
+        echo "Warning: Could not destroy Vagrant entry $ENTRY_ID, trying with sudo..."
+        # Try with sudo for entries created as root
+        if sudo -n vagrant destroy "$ENTRY_ID" -f 2>/dev/null; then
+          echo "✓ Cleaned up Vagrant entry with sudo: $ENTRY_ID"
+        else
+          echo "Warning: Failed to destroy entry $ENTRY_ID even with sudo, removing from cache..."
+          # Force remove the stale entry by pruning and then manually removing if needed
+          vagrant global-status --prune 2>/dev/null || true
+        fi
+      fi
+    done
+    
+    # Always prune stale entries at the end
+    echo "Pruning stale Vagrant global status entries..."
+    if vagrant global-status --prune 2>/dev/null; then
+      echo "✓ Successfully pruned Vagrant global status"
+    else
+      echo "Warning: Could not prune with vagrant command, manually cleaning machine index..."
+      manual_clean_vagrant_index
+    fi
+  else
+    echo "No Vagrant global status entries found for '$DEV_USERNAME'"
+  fi
+}
+
+# Function to clean up local Vagrant state directory
+cleanup_local_vagrant_state() {
+  local VAGRANT_DIR=".vagrant"
+  local MACHINE_DIR="$VAGRANT_DIR/machines/$DEV_USERNAME"
+  
+  if [ -d "$MACHINE_DIR" ]; then
+    echo "Found local Vagrant state for '$DEV_USERNAME' at $MACHINE_DIR"
+    
+    # Check if the directory is owned by root and we're not root
+    if [ "$(stat -c %u "$MACHINE_DIR")" = "0" ] && [ "$(id -u)" != "0" ]; then
+      echo "Local Vagrant state owned by root, removing with sudo..."
+      if sudo rm -rf "$MACHINE_DIR" 2>/dev/null; then
+        echo "✓ Removed local Vagrant state for '$DEV_USERNAME'"
+      else
+        echo "Warning: Failed to remove local Vagrant state (no sudo access)"
+        echo "Local Vagrant state created by root prevents VM recreation."
+        echo ""
+        echo "To fix this issue, run one of these commands:"
+        echo "  sudo rm -rf $VAGRANT_DIR"
+        echo "  sudo rm -rf $MACHINE_DIR"
+        echo ""
+        echo "This cleanup is required before creating new VMs."
+      fi
+    else
+      echo "Removing local Vagrant state for '$DEV_USERNAME'..."
+      rm -rf "$MACHINE_DIR"
+      echo "✓ Removed local Vagrant state for '$DEV_USERNAME'"
+    fi
+    
+    # If no machines left, remove the entire .vagrant directory
+    if [ -d "$VAGRANT_DIR/machines" ] && [ -z "$(ls -A "$VAGRANT_DIR/machines" 2>/dev/null)" ]; then
+      echo "No machines left, removing entire .vagrant directory..."
+      if [ "$(stat -c %u "$VAGRANT_DIR")" = "0" ] && [ "$(id -u)" != "0" ]; then
+        sudo rm -rf "$VAGRANT_DIR" 2>/dev/null || echo "Warning: Failed to remove .vagrant directory"
+      else
+        rm -rf "$VAGRANT_DIR"
+      fi
+      echo "✓ Removed empty .vagrant directory"
+    fi
+  else
+    echo "No local Vagrant state found for '$DEV_USERNAME'"
+  fi
+}
+
+# Function to manually clean Vagrant machine index when prune fails
+manual_clean_vagrant_index() {
+  local MACHINE_INDEX_FILE="$HOME/.vagrant.d/data/machine-index/index"
+  
+  if [ ! -f "$MACHINE_INDEX_FILE" ]; then
+    echo "No Vagrant machine index file found at $MACHINE_INDEX_FILE"
+    return
+  fi
+  
+  echo "Manually cleaning Vagrant machine index for '$DEV_USERNAME'..."
+  
+  # Create a backup
+  cp "$MACHINE_INDEX_FILE" "${MACHINE_INDEX_FILE}.backup.$(date +%s)"
+  
+  # Use jq to remove all entries for the specific username (since VMs don't exist)
+  if command -v jq >/dev/null 2>&1; then
+    jq --arg username "$DEV_USERNAME" '
+      .machines = (.machines | with_entries(select(.value.name != $username)))
+    ' "$MACHINE_INDEX_FILE" > "${MACHINE_INDEX_FILE}.tmp"
+    
+    # Only update if jq succeeded
+    if [ $? -eq 0 ]; then
+      mv "${MACHINE_INDEX_FILE}.tmp" "$MACHINE_INDEX_FILE"
+      echo "✓ Manually removed all '$DEV_USERNAME' entries from Vagrant machine index"
+    else
+      echo "Warning: Failed to clean machine index with jq"
+      rm -f "${MACHINE_INDEX_FILE}.tmp"
+    fi
+  else
+    echo "Warning: jq not available for machine index cleanup"
   fi
 }
 
@@ -63,6 +193,12 @@ if DEV_USERNAME="$DEV_USERNAME" sudo -E vagrant destroy "$DEV_USERNAME" -f; then
     cleanup_virtualbox_vm
   else
     echo "✓ Verified: VirtualBox VM '$VM_NAME' has been completely removed."
+    
+    # Also clean up local .vagrant state
+    echo ">>> Cleaning up local Vagrant state..."
+    cleanup_local_vagrant_state
+    
+    echo "✓ Complete cleanup successful."
     exit 0 # Success
   fi
 else
@@ -71,12 +207,12 @@ else
   # Need the current directory path for matching
   CURRENT_DIR=$(pwd)
   # Use awk for more robust parsing of the global-status output
-  GLOBAL_ID=$(vagrant global-status | awk -v name="$DEV_USERNAME" -v dir="$CURRENT_DIR" '$2 == name && $5 == dir { print $1 }')
+  GLOBAL_ID=$(DEV_USERNAME="$DEV_USERNAME" vagrant global-status | awk -v name="$DEV_USERNAME" -v dir="$CURRENT_DIR" '$2 == name && $5 == dir { print $1 }')
 
   if [ -n "$GLOBAL_ID" ]; then
     echo "Found global ID '$GLOBAL_ID' for machine '$DEV_USERNAME' in directory '$CURRENT_DIR'."
     echo "Attempting to destroy using global ID: vagrant destroy $GLOBAL_ID -f"
-    if vagrant destroy "$GLOBAL_ID" -f; then
+    if DEV_USERNAME="$DEV_USERNAME" vagrant destroy "$GLOBAL_ID" -f; then
       echo "VM for '$DEV_USERNAME' (ID: $GLOBAL_ID) destroyed successfully via global ID."
       
       # Verify that VirtualBox VM is actually gone
@@ -87,6 +223,12 @@ else
         cleanup_virtualbox_vm
       else
         echo "✓ Verified: VirtualBox VM '$VM_NAME' has been completely removed."
+        
+        # Also clean up local .vagrant state
+        echo ">>> Cleaning up local Vagrant state..."
+        cleanup_local_vagrant_state
+        
+        echo "✓ Complete cleanup successful."
         exit 0 # Success
       fi
     else

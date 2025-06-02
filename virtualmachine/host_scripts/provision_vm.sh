@@ -23,10 +23,14 @@ echo ">>> Ensuring VM for user '$DEV_USERNAME' exists and is running..."
 # 2. Start the VM if it exists but is stopped.
 # 3. Do nothing if the VM is already running.
 # We now pass $DEV_USERNAME as the machine name argument to vagrant
-# Use sudo -E to ensure consistency with how VMs might have been created/managed
-if ! DEV_USERNAME="$DEV_USERNAME" sudo -E vagrant up "$DEV_USERNAME" --provider=virtualbox; then
+# Try without sudo first, fallback to sudo if needed
+if DEV_USERNAME="$DEV_USERNAME" vagrant up "$DEV_USERNAME" --provider=virtualbox; then
+    echo ">>> VM created successfully without sudo"
+elif DEV_USERNAME="$DEV_USERNAME" sudo -E vagrant up "$DEV_USERNAME" --provider=virtualbox 2>/dev/null; then
+    echo ">>> VM created successfully with sudo"
+else
     echo ""
-    echo "Error: 'sudo -E vagrant up $DEV_USERNAME' failed for VM '$VM_NAME'. Cannot proceed."
+    echo "Error: 'vagrant up $DEV_USERNAME' failed for VM '$VM_NAME'. Cannot proceed."
     exit 1
 fi
 echo ">>> VM '$VM_NAME' is up and running."
@@ -35,10 +39,14 @@ echo ">>> VM '$VM_NAME' is up and running."
 # Vagrant provision should wait for SSH to be ready.
 echo ""
 echo ">>> Running provisioning for VM '$VM_NAME'..."
-# We now pass $DEV_USERNAME as the machine name argument to vagrant
-if ! DEV_USERNAME="$DEV_USERNAME" sudo -E vagrant provision "$DEV_USERNAME"; then
+# Try without sudo first, fallback to sudo if needed
+if DEV_USERNAME="$DEV_USERNAME" vagrant provision "$DEV_USERNAME"; then
+    echo ">>> VM provisioned successfully without sudo"
+elif DEV_USERNAME="$DEV_USERNAME" sudo -E vagrant provision "$DEV_USERNAME" 2>/dev/null; then
+    echo ">>> VM provisioned successfully with sudo"
+else
     echo ""
-    echo "Error: 'sudo -E vagrant provision $DEV_USERNAME' failed for VM '$VM_NAME'."
+    echo "Error: 'vagrant provision $DEV_USERNAME' failed for VM '$VM_NAME'."
     exit 1
 fi
 
