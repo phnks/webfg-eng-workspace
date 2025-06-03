@@ -124,12 +124,12 @@ def test_container_startup(use_sudo=False):
         print("❌ start_container.sh not found")
         return False
     
-    # First try the original docker-compose method
+    # Test the original start_container.sh script (now with Docker Compose v2 support)
     cmd = f"./scripts/start_container.sh {TEST_USER}"
     success, stdout, stderr = run_command(cmd, cwd=DOCKER_DIR, timeout=60, use_sudo=use_sudo)
     
     if not success:
-        print("❌ Docker Compose startup failed!")
+        print("❌ Container startup failed!")
         print("=" * 50)
         print("STDOUT:")
         print(stdout)
@@ -140,7 +140,7 @@ def test_container_startup(use_sudo=False):
         
         # Check if this is the known 'ContainerConfig' error
         if "'ContainerConfig'" in stderr:
-            print("\n🚨 DETECTED: 'ContainerConfig' error - this is a known Docker Compose v1.x issue")
+            print("\n🚨 DETECTED: 'ContainerConfig' error - Docker Compose version compatibility issue")
             
             # Check docker-compose version
             success2, out2, err2 = run_command("docker-compose --version", use_sudo=use_sudo)
@@ -148,29 +148,24 @@ def test_container_startup(use_sudo=False):
                 version = out2.strip()
                 print(f"Docker Compose version: {version}")
                 if "1." in version:
-                    print("🔧 This is Docker Compose v1.x - known to have compatibility issues")
-                    
-                    # Try the alternative direct docker run method
-                    print("\n🔄 Trying alternative startup method using docker run...")
-                    direct_script = DOCKER_DIR / "scripts" / "start_container_direct.sh"
-                    if direct_script.exists():
-                        cmd_direct = f"./scripts/start_container_direct.sh {TEST_USER}"
-                        success_direct, stdout_direct, stderr_direct = run_command(
-                            cmd_direct, cwd=DOCKER_DIR, timeout=60, use_sudo=use_sudo
-                        )
-                        
-                        if success_direct:
-                            print("✅ Alternative startup method worked!")
-                            print(f"STDOUT: {stdout_direct}")
-                            return True
-                        else:
-                            print("❌ Alternative startup method also failed!")
-                            print(f"STDERR: {stderr_direct}")
-                    else:
-                        print("❌ Alternative startup script not found")
+                    print("🔧 Docker Compose v1.x detected - needs upgrade to v2+")
+                    print("\n📋 Please upgrade Docker Compose by running:")
+                    print("   sudo apt update")
+                    print("   sudo apt install -y docker-compose-plugin")
+                    print("\n✅ After upgrade, the script should work correctly.")
+                    print("   The updated start_container.sh will automatically detect and use Docker Compose v2.")
         
         # Additional debugging for other errors
         print("\n🔍 Additional debugging info:")
+        
+        # Check if docker compose v2 is available
+        success_v2, out_v2, err_v2 = run_command("docker compose version", use_sudo=use_sudo)
+        if success_v2:
+            print(f"✅ Docker Compose v2 available: {out_v2.strip()}")
+            print("The script should automatically use this version.")
+        else:
+            print("❌ Docker Compose v2 not available")
+            print("Please install with: sudo apt install -y docker-compose-plugin")
         
         # Check if docker-compose.yml is valid
         success3, out3, err3 = run_command("docker-compose config", cwd=DOCKER_DIR, use_sudo=use_sudo)
@@ -183,17 +178,6 @@ def test_container_startup(use_sudo=False):
         success4, out4, err4 = run_command("docker ps -a --filter name=agent", use_sudo=use_sudo)
         if success4:
             print(f"Existing containers:\n{out4}")
-        
-        # Provide specific fix suggestions
-        print("\n🔧 Suggested fixes:")
-        print("1. 📋 Run the Docker Compose fix script:")
-        print("   ./scripts/fix_docker_compose.sh")
-        print("2. 🧹 Clean up Docker system:")
-        print("   sudo docker system prune -a")
-        print("3. ⬆️ Upgrade Docker Compose:")
-        print("   sudo apt install docker-compose-plugin")
-        print("4. 🔄 Use alternative startup:")
-        print("   ./scripts/start_container_direct.sh")
         
         return False
     
