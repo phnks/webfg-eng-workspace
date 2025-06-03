@@ -27,22 +27,24 @@ fi
 echo "Creating inference profiles for $ENV environment..."
 
 # Set model ARN based on environment
-# Using the system-provided inference profile for Claude Opus 4 instead of the direct foundation model ARN
-# System-provided inference profiles are required for models that only support INFERENCE_PROFILE type
-# This profile routes to multiple regions for better availability
-MODEL_ARN="arn:aws:bedrock:us-west-2:252011305655:inference-profile/us.anthropic.claude-opus-4-20250514-v1:0"  # Using Claude Opus 4 system inference profile
+# Using the direct Claude Opus 4 foundation model ARN
+# Note: Claude Opus 4 only supports INFERENCE_PROFILE type, not ON_DEMAND
+MODEL_ARN="arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-opus-4-20250514-v1:0"  # Using Claude Opus 4 model ARN
 # For embedding model, we need one that supports ON_DEMAND type
 EMBEDDING_MODEL_ARN="arn:aws:bedrock:us-west-2::foundation-model/amazon.titan-embed-text-v2:0"  # Using Titan Embed Text for embeddings (supports ON_DEMAND)
 
 # Note: Claude Opus 4 only supports INFERENCE_PROFILE and not ON_DEMAND
 
-# Use the system-provided inference profile directly instead of creating a new one
-MAIN_PROFILE_NAME="us.anthropic.claude-opus-4-20250514-v1:0"
-echo "Using system-provided inference profile: $MAIN_PROFILE_NAME directly"
+# Create a custom inference profile for Claude Opus 4
+MAIN_PROFILE_NAME="coding-agent-inference-profile-${ENV}"
+echo "Creating custom inference profile: $MAIN_PROFILE_NAME"
 
-# Store the system inference profile ARN directly
-MAIN_PROFILE_ARN="$MODEL_ARN"
-echo "Using system inference profile ARN: $MAIN_PROFILE_ARN"
+# Create inference profile for Claude Opus 4
+aws bedrock create-inference-profile \
+    --inference-profile-name "$MAIN_PROFILE_NAME" \
+    --model-source copyFrom="$MODEL_ARN" \
+    --tags "[{\"key\":\"Environment\",\"value\":\"$ENV\"},{\"key\":\"Project\",\"value\":\"WebFG-Coding-Agent\"}]" \
+    $DRY_RUN_FLAG
 
 # Get the main inference profile ARN if not in dry-run mode
 if [[ "$DRY_RUN" != "--dry-run" ]]; then
