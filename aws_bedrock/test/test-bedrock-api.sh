@@ -19,7 +19,7 @@ echo "✅ Successfully listed foundation models"
 
 # Check if specific models we need are available
 echo "Checking required models..."
-aws bedrock list-foundation-models --query "modelSummaries[?modelId=='anthropic.claude-3-5-sonnet-20240620-v1:0' || modelId=='amazon.titan-embed-text-v2:0'].modelId" --output text
+aws bedrock list-foundation-models --query "modelSummaries[?modelId=='anthropic.claude-opus-4-20250514-v1:0' || modelId=='amazon.titan-embed-text-v2:0'].modelId" --output text
 
 if [ $? -ne 0 ]; then
     echo "❌ Failed to check for required models"

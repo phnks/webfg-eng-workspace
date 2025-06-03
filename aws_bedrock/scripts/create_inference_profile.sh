@@ -27,8 +27,9 @@ fi
 echo "Creating inference profiles for $ENV environment..."
 
 # Set model ARN based on environment
-# Switch to Claude 3.5 Sonnet instead of Opus 4 since it supports both ON_DEMAND and INFERENCE_PROFILE
-MODEL_ARN="arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-3-5-sonnet-20240620-v1:0"  # Using Claude 3.5 Sonnet for all environments
+# Using Claude Opus 4 as requested - note that it only supports INFERENCE_PROFILE type
+MODEL_ARN="arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-opus-4-20250514-v1:0"  # Using Claude Opus 4 for all environments
+# For embedding model, we need one that supports inference profiles as well
 EMBEDDING_MODEL_ARN="arn:aws:bedrock:us-west-2::foundation-model/amazon.titan-embed-text-v2:0"  # Using Titan Embed Text for embeddings
 
 # Note: Claude Opus 4 only supports INFERENCE_PROFILE and not ON_DEMAND
