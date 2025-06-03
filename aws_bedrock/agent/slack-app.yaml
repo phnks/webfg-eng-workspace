@@ -1,0 +1,105 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Slack integration for WebFG Coding Agent
+
+Parameters:
+  AgentId:
+    Type: String
+    Description: The ID of the Bedrock agent
+
+  AgentAliasId:
+    Type: String
+    Description: The ID of the Bedrock agent alias
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, qa, prod]
+    Description: Environment for deployment
+
+Resources:
+  # Secret for Slack API tokens
+  SlackSecrets:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "coding-agent-slack-tokens-${Environment}"
+      Description: "Slack API tokens for Coding Agent"
+      SecretString: '{"SLACK_BOT_TOKEN":"<placeholder>","SLACK_SIGNING_SECRET":"<placeholder>","SLACK_APP_TOKEN":"<placeholder>"}'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+  # IAM Role for Lambda integration
+  SlackIntegrationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: SlackIntegrationPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'secretsmanager:GetSecretValue'
+                Resource: !Ref SlackSecrets
+              - Effect: Allow
+                Action:
+                  - 'bedrock:InvokeAgent'
+                Resource: !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:agent-alias/${AgentId}/${AgentAliasId}"
+
+  # Lambda for Slack event handling
+  SlackEventHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "coding-agent-slack-handler-${Environment}"
+      CodeUri: ./lambdas/slack_handler/
+      Handler: app.lambda_handler
+      Runtime: python3.10
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          AGENT_ID: !Ref AgentId
+          AGENT_ALIAS_ID: !Ref AgentAliasId
+          SLACK_TOKENS_SECRET: !Ref SlackSecrets
+      Role: !GetAtt SlackIntegrationRole.Arn
+      Events:
+        SlackEvent:
+          Type: Api
+          Properties:
+            Path: /slack/events
+            Method: post
+      Tags:
+        Environment: !Ref Environment
+        Project: WebFG-Coding-Agent
+
+  # API Gateway for Slack integration
+  SlackApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref Environment
+      Auth:
+        ApiKeyRequired: false
+      Tags:
+        Environment: !Ref Environment
+        Project: WebFG-Coding-Agent
+
+Outputs:
+  WebhookUrl:
+    Description: Webhook URL for Slack integration
+    Value: !Sub "https://${SlackApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/slack/events"
+
+  SlackHandlerFunction:
+    Description: Lambda function ARN for Slack event handler
+    Value: !GetAtt SlackEventHandlerFunction.Arn

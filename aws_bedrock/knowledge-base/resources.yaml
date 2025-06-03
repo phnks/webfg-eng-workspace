@@ -1,0 +1,174 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Knowledge Base for WebFG Coding Agent'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, qa, prod]
+    Description: Environment for deployment
+  
+  DocumentsBucketName:
+    Type: String
+    Default: webfg-coding-agent-docs
+    Description: Name of the S3 bucket that will store documentation
+
+  DataSourcePath:
+    Type: String
+    Default: documentation/
+    Description: Path prefix within the S3 bucket for documentation files
+
+Resources:
+  # Create S3 bucket for documentation
+  DocumentsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${DocumentsBucketName}-${Environment}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+  # IAM Role for Knowledge Base to access S3
+  KnowledgeBaseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonBedrockFullAccess'
+      Policies:
+        - PolicyName: S3AccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:ListBucket'
+                Resource:
+                  - !Sub "arn:aws:s3:::${DocumentsBucket}"
+                  - !Sub "arn:aws:s3:::${DocumentsBucket}/*"
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+  # Knowledge Base Definition
+  CodingAgentKnowledgeBase:
+    Type: AWS::Bedrock::KnowledgeBase
+    Properties:
+      Name: !Sub "coding-agent-kb-${Environment}"
+      Description: 'Knowledge base for WebFG Coding Agent containing programming documentation and code samples'
+      RoleArn: !GetAtt KnowledgeBaseRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: VECTOR
+        VectorKnowledgeBaseConfiguration:
+          EmbeddingModelConfiguration:
+            BedrockEmbeddingModelConfiguration:
+              ModelArn: !ImportValue 
+                Fn::Sub: "coding-inference-profiles-${Environment}-EmbeddingProfileArn"
+      StorageConfiguration:
+        Type: OPENSEARCH_SERVERLESS
+        OpensearchServerlessConfiguration:
+          CollectionArn: !GetAtt CodingAgentCollection.Arn
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+  # OpenSearch Serverless Collection for Knowledge Base
+  CodingAgentCollection:
+    Type: AWS::OpenSearchServerless::Collection
+    Properties:
+      Name: !Sub "coding-agent-kb-collection-${Environment}"
+      Type: VECTORSEARCH
+      StandbyReplicas: DISABLED
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+  # OpenSearch Serverless Access Policy
+  CodingAgentAccessPolicy:
+    Type: AWS::OpenSearchServerless::AccessPolicy
+    Properties:
+      Name: !Sub "coding-agent-kb-access-policy-${Environment}"
+      Type: 'data'
+      Description: 'Access policy for Coding Agent KB'
+      Policy: !Sub |
+        {
+          "Rules": [
+            {
+              "Resource": ["collection/${CodingAgentCollection.Name}"],
+              "Permission": ["aoss:*"],
+              "Principal": ["arn:aws:iam::${AWS::AccountId}:role/${KnowledgeBaseRole.RoleName}"]
+            }
+          ],
+          "Version": "2012-10-17"
+        }
+
+  # Data source for the Knowledge Base
+  CodingAgentDataSource:
+    Type: AWS::Bedrock::DataSource
+    Properties:
+      DataSourceConfiguration:
+        Type: S3
+        S3Configuration:
+          BucketArn: !GetAtt DocumentsBucket.Arn
+          InclusionPrefixes:
+            - !Ref DataSourcePath
+      Name: !Sub "coding-agent-docs-${Environment}"
+      KnowledgeBaseId: !GetAtt CodingAgentKnowledgeBase.KnowledgeBaseId
+      DataDeletionPolicy: DELETE_INGESTED_DATA
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+Outputs:
+  KnowledgeBaseId:
+    Description: ID of Coding Agent Knowledge Base
+    Value: !GetAtt CodingAgentKnowledgeBase.KnowledgeBaseId
+    Export:
+      Name: !Sub "${AWS::StackName}-KnowledgeBaseId"
+      
+  DocumentsBucketName:
+    Description: Name of the S3 bucket storing documentation
+    Value: !Ref DocumentsBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-DocumentsBucketName"
+
+  CollectionId:
+    Description: ID of OpenSearch Serverless Collection
+    Value: !GetAtt CodingAgentCollection.Id
+    Export:
+      Name: !Sub "${AWS::StackName}-CollectionId"
+
+  DataSourceId:
+    Description: ID of Knowledge Base Data Source
+    Value: !GetAtt CodingAgentDataSource.DataSourceId
+    Export:
+      Name: !Sub "${AWS::StackName}-DataSourceId"

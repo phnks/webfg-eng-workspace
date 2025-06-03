@@ -1,0 +1,341 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'WebFG Coding Agent for AWS Bedrock (QA Environment)'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: qa
+    AllowedValues: [dev, qa]
+    Description: Environment for deployment
+
+Resources:
+  # IAM Role for Lambda functions
+  CodingAgentLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - 'arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess'
+      Policies:
+        - PolicyName: CodingAgentLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: '*'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+  # Lambda function for code repository search
+  CodeRepositorySearchLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "coding-agent-code-repository-search-${Environment}"
+      Runtime: python3.10
+      Handler: code_repository_search.lambda_handler
+      Role: !GetAtt CodingAgentLambdaRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Code:
+        ZipFile: |
+          # This is a placeholder. The actual code will be deployed from a deployment package.
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': '{"response": {"status": "success", "message": "This is a placeholder. Please deploy the actual Lambda function code."}}'
+              }
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+  # Lambda function for code analysis
+  CodeAnalysisLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "coding-agent-code-analysis-${Environment}"
+      Runtime: python3.10
+      Handler: code_analysis.lambda_handler
+      Role: !GetAtt CodingAgentLambdaRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Code:
+        ZipFile: |
+          # This is a placeholder. The actual code will be deployed from a deployment package.
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': '{"response": {"status": "success", "message": "This is a placeholder. Please deploy the actual Lambda function code."}}'
+              }
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+  # Lambda function for document search
+  DocumentSearchLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "coding-agent-document-search-${Environment}"
+      Runtime: python3.10
+      Handler: document_search.lambda_handler
+      Role: !GetAtt CodingAgentLambdaRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          KNOWLEDGE_BASE_ID: !ImportValue 
+            Fn::Sub: "coding-agent-knowledge-base-${Environment}-KnowledgeBaseId"
+      Code:
+        ZipFile: |
+          # This is a placeholder. The actual code will be deployed from a deployment package.
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': '{"response": {"status": "success", "message": "This is a placeholder. Please deploy the actual Lambda function code."}}'
+              }
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+  # IAM Role for Bedrock Agent
+  CodingAgentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonBedrockFullAccess'
+      Policies:
+        - PolicyName: CodingAgentPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'lambda:InvokeFunction'
+                Resource:
+                  - !GetAtt CodeRepositorySearchLambda.Arn
+                  - !GetAtt CodeAnalysisLambda.Arn
+                  - !GetAtt DocumentSearchLambda.Arn
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+  # AWS Bedrock Guardrail
+  CodingAgentGuardrail:
+    Type: AWS::Bedrock::Guardrail
+    Properties:
+      Name: !Sub "coding-agent-guardrail-${Environment}"
+      Description: "Guardrail for WebFG Coding Agent to ensure safe interactions"
+      GuardrailConfiguration:
+        Version: "DRAFT"
+        ContentPolicyConfig:
+          FiltersConfig:
+            Filters:
+              - Type: INSULTS
+                Strength: MEDIUM
+              - Type: HATE
+                Strength: MEDIUM
+              - Type: SEXUAL
+                Strength: MEDIUM
+              - Type: VIOLENCE
+                Strength: MEDIUM
+          TopicsConfig:
+            Definitions:
+              - Name: "FinancialAdvice"
+                Description: "Financial advice and recommendations"
+              - Name: "LegalAdvice"
+                Description: "Legal advice and recommendations"
+            Topics:
+              - Name: "FinancialAdvice"
+                Type: DENY
+              - Name: "LegalAdvice"
+                Type: DENY
+        WordPolicyConfig:
+          ManagedWordLists:
+            - Type: PROFANITY
+          Words:
+            - Text: "sudo rm -rf /"
+              Type: DENY
+            - Text: "rm -rf"
+              Type: DENY
+            - Text: "curl | bash"
+              Type: DENY
+            - Text: "wget | bash"
+              Type: DENY
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+  # AWS Bedrock Agent
+  CodingAgent:
+    Type: AWS::Bedrock::Agent
+    Properties:
+      AgentName: !Sub "coding-agent-${Environment}"
+      Description: "WebFG Coding Assistant for software development tasks"
+      InstructionConfig:
+        InstructionSourceConfiguration:
+          InstructionSource:
+            S3InstructionSourceConfiguration:
+              S3BucketName: !ImportValue 
+                Fn::Sub: "coding-agent-knowledge-base-${Environment}-DocumentsBucketName"
+              S3ObjectKey: "instructions/coding-agent-instruction.md"
+      FoundationModel: !ImportValue 
+        Fn::Sub: "coding-inference-profiles-${Environment}-InferenceProfileArn"
+      ActionGroups:
+        - ActionGroupName: "CodeAssistTools"
+          Description: "Tools for code search, analysis, and documentation"
+          ActionGroupExecutor:
+            Lambda:
+              - ActionName: "CodeRepositorySearch"
+                Description: "Search code repositories for patterns or files"
+                LambdaArn: !GetAtt CodeRepositorySearchLambda.Arn
+                ParameterSchema:
+                  JsonSchema:
+                    Type: "object"
+                    Properties:
+                      query:
+                        Type: "string"
+                        Description: "The search query (e.g., function name, pattern)"
+                      repo_path:
+                        Type: "string"
+                        Description: "Optional path to narrow the search"
+                      language:
+                        Type: "string"
+                        Description: "Optional language filter (e.g., python, javascript)"
+                      max_results:
+                        Type: "integer"
+                        Description: "Maximum number of results to return (default: 10)"
+                    Required:
+                      - "query"
+              - ActionName: "CodeAnalysis"
+                Description: "Analyze code to provide insights about structure and quality"
+                LambdaArn: !GetAtt CodeAnalysisLambda.Arn
+                ParameterSchema:
+                  JsonSchema:
+                    Type: "object"
+                    Properties:
+                      file_path:
+                        Type: "string"
+                        Description: "Path to the file to analyze"
+                      language:
+                        Type: "string"
+                        Description: "Language of the code (e.g., python, javascript)"
+                      analysis_type:
+                        Type: "string"
+                        Description: "Type of analysis to perform (structure, quality, security, all)"
+                        Enum:
+                          - "structure"
+                          - "quality"
+                          - "security"
+                          - "all"
+                    Required:
+                      - "file_path"
+              - ActionName: "DocumentSearch"
+                Description: "Search documentation for relevant information"
+                LambdaArn: !GetAtt DocumentSearchLambda.Arn
+                ParameterSchema:
+                  JsonSchema:
+                    Type: "object"
+                    Properties:
+                      query:
+                        Type: "string"
+                        Description: "The search query"
+                      doc_type:
+                        Type: "string"
+                        Description: "Optional documentation type filter"
+                      max_results:
+                        Type: "integer"
+                        Description: "Maximum number of results to return (default: 5)"
+                    Required:
+                      - "query"
+      CustomerEncryptionKeyArn: ""
+      IdleSessionTTLInSeconds: 300
+      RoleArn: !GetAtt CodingAgentRole.Arn
+      KnowledgeBases:
+        - KnowledgeBaseId: !ImportValue 
+            Fn::Sub: "coding-agent-knowledge-base-${Environment}-KnowledgeBaseId"
+          Description: "Programming documentation and code examples"
+      GuardrailConfiguration:
+        GuardrailIdentifier: !GetAtt CodingAgentGuardrail.Arn
+        GuardrailVersion: "DRAFT"
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+  # Agent Alias for Development/QA
+  CodingAgentAlias:
+    Type: AWS::Bedrock::AgentAlias
+    Properties:
+      AgentAliasName: !Sub "coding-agent-alias-${Environment}"
+      AgentId: !GetAtt CodingAgent.AgentId
+      Description: !Sub "Coding Agent alias for ${Environment} environment"
+      RoutingConfiguration:
+        - AgentVersion: "DRAFT"
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+  # Slack App Resources
+  CodingAgentSlackApp:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: ./slack-app.yaml
+      Parameters:
+        AgentId: !GetAtt CodingAgent.AgentId
+        AgentAliasId: !GetAtt CodingAgentAlias.AgentAliasId
+        Environment: !Ref Environment
+      Tags:
+        Environment: !Ref Environment
+        Project: WebFG-Coding-Agent
+
+Outputs:
+  AgentId:
+    Description: ID of WebFG Coding Agent
+    Value: !GetAtt CodingAgent.AgentId
+    Export:
+      Name: !Sub "${AWS::StackName}-AgentId"
+
+  AgentAliasId:
+    Description: ID of WebFG Coding Agent Alias
+    Value: !GetAtt CodingAgentAlias.AgentAliasId
+    Export:
+      Name: !Sub "${AWS::StackName}-AgentAliasId"
+
+  GuardrailId:
+    Description: ID of WebFG Coding Agent Guardrail
+    Value: !GetAtt CodingAgentGuardrail.GuardrailId
+    Export:
+      Name: !Sub "${AWS::StackName}-GuardrailId"

@@ -1,0 +1,7 @@
+project_name: coding-inference-profiles
+version: "1.0.0"
+tags:
+  "webfg:owneremail": "admin@webfg.com"
+  "webfg:sensitive-data": "False"
+  "webfg:severity": "low"
+  "webfg:slack-channel": "webfg-coding-agent"
