@@ -31,6 +31,14 @@ else
   echo ">>> IPv4 precedence already present in /etc/gai.conf"
 fi
 
+echo ">>> Fixing any interrupted dpkg processes..."
+# Fix any previously interrupted dpkg processes
+dpkg --configure -a || {
+    echo "dpkg --configure -a failed, attempting to fix..."
+    apt-get install -f -y
+    dpkg --configure -a
+}
+
 echo ">>> Installing Xubuntu Desktop Environment..."
 # Install the core Xubuntu desktop and LightDM display manager
 # Use --no-install-recommends to keep it slightly leaner if desired, but full install is safer for compatibility
@@ -597,75 +605,43 @@ else
 fi
 # --- End Discord MCP Server Setup ---
 
-# --- Install Correct VirtualBox Guest Additions (7.0.x) ---
-echo ">>> Checking/Installing VirtualBox Guest Additions (target: 7.0.x)..."
+# --- Handle VirtualBox Guest Additions ---
+echo ">>> Checking VirtualBox Guest Additions status..."
 
 # ensure build tools & headers are present
 apt-get install -y build-essential dkms linux-headers-$(uname -r)
 
-# pick your exact 7.0 version here (match the host: e.g. 7.0.26)
-GA_VERSION="7.0.26"
-GA_FLAG_FILE="/opt/vbox_ga_installed_${GA_VERSION}"
-
-if [ -f "$GA_FLAG_FILE" ]; then
-    echo "VirtualBox Guest Additions version ${GA_VERSION} already installed. Skipping."
-else
-    echo ">>> Installing VirtualBox Guest Additions version ${GA_VERSION}..."
-    GA_ISO="VBoxGuestAdditions_${GA_VERSION}.iso"
-    GA_URL="https://download.virtualbox.org/virtualbox/${GA_VERSION}/${GA_ISO}"
-    ISO_MOUNT_POINT="/mnt/vbox_ga"
-
-    echo "Downloading Guest Additions ISO from ${GA_URL}..."
-    wget -q -O "/tmp/${GA_ISO}" "${GA_URL}" || {
-      echo "Error: failed to download ${GA_ISO}"; exit 1
-    }
-
-    echo "Mounting Guest Additions ISO..."
-    mkdir -p "${ISO_MOUNT_POINT}"
-    mount -o loop "/tmp/${GA_ISO}" "${ISO_MOUNT_POINT}" || {
-      echo "Error: failed to mount ${GA_ISO}"; exit 1
-    }
-
-    echo "Running Guest Additions installer..."
-    # Run the installer. If it fails, the script will exit due to set -e
-    # If it completes with a non-zero exit but doesn't cause script exit (e.g. due to || {}),
-    # we might still want to create the flag if the core functionality is there.
-    # For now, we assume success means the flag should be created.
-    if sh "${ISO_MOUNT_POINT}/VBoxLinuxAdditions.run" --nox11; then
-        echo "Guest Additions installer completed successfully."
-    else
-        INSTALL_EXIT_CODE=$?
-        echo "Warning: VBoxLinuxAdditions.run exited with code ${INSTALL_EXIT_CODE}; check /var/log/vboxadd-setup.log"
-        # Decide if we should still create the flag or exit.
-        # For robustness, let's only create the flag on a zero exit code from the installer.
-        # If a warning is acceptable and GA still works, this logic might need adjustment.
-        # Given `set -e`, the `|| { echo "Warning..." }` block for the installer was more for logging.
-        # We'll keep the original structure for the installer run and create the flag after cleanup if we reach that point.
+# Check if Guest Additions are already installed and functional
+if systemctl is-active --quiet vboxadd.service 2>/dev/null || systemctl is-active --quiet vboxadd 2>/dev/null; then
+    echo ">>> VirtualBox Guest Additions service is already active"
+    # Try to get the version
+    if command -v VBoxService &>/dev/null; then
+        GA_INSTALLED_VERSION=$(VBoxService --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1 || echo "unknown")
+        echo ">>> Installed Guest Additions version: $GA_INSTALLED_VERSION"
     fi
-    # The original script had:
-    # sh "${ISO_MOUNT_POINT}/VBoxLinuxAdditions.run" --nox11 || {
-    #  echo "Warning: VBoxLinuxAdditions.run exited non‑zero; check /var/log/vboxadd-setup.log"
-    # }
-    # If `set -e` is active, a non-zero exit from `sh` would terminate the script unless it's part of an `if` or `||`.
-    # Let's assume the original `||` was to allow the script to continue and log a warning.
-    # If we want to ensure the flag is only created on true success, we need to be careful.
-
-    # Reverting to a structure closer to original for the installer run,
-    # but ensuring flag creation happens only if this block completes.
-    sh "${ISO_MOUNT_POINT}/VBoxLinuxAdditions.run" --nox11 || {
-      echo "Warning: VBoxLinuxAdditions.run exited non‑zero; check /var/log/vboxadd-setup.log. Guest Additions might not be fully functional."
-      # We will still proceed to cleanup and create the flag, as the original script did not exit here.
-      # If a hard failure is desired, `exit 1` should be here.
-    }
-
-    echo "Cleaning up Guest Additions installation files..."
-    umount "${ISO_MOUNT_POINT}" || echo "Warning: failed to umount ${ISO_MOUNT_POINT}. Continuing cleanup."
-    rm -rf "${ISO_MOUNT_POINT}" "/tmp/${GA_ISO}" || echo "Warning: failed to remove temp files. Continuing."
-
-    echo ">>> Guest Additions ${GA_VERSION} installation attempt complete."
-    echo "Creating flag file: ${GA_FLAG_FILE}"
-    touch "${GA_FLAG_FILE}" || echo "Warning: Failed to create flag file ${GA_FLAG_FILE}"
+    echo ">>> Skipping Guest Additions installation"
+else
+    echo ">>> VirtualBox Guest Additions service not active or not found"
+    
+    # First try to fix/rebuild existing Guest Additions if present
+    if [ -f "/opt/VBoxGuestAdditions*/init/vboxadd" ]; then
+        echo ">>> Attempting to rebuild existing Guest Additions kernel modules..."
+        /opt/VBoxGuestAdditions*/init/vboxadd setup 2>&1 || echo "Warning: vboxadd setup failed"
+    fi
+    
+    # If still not working, check if we need to install from scratch
+    if ! systemctl is-active --quiet vboxadd.service 2>/dev/null && ! systemctl is-active --quiet vboxadd 2>/dev/null; then
+        # Use the Guest Additions that come with the box if possible
+        echo ">>> Guest Additions still not working. The box should include compatible Guest Additions."
+        echo ">>> If issues persist, Guest Additions may need manual intervention."
+    fi
 fi
+
+# Skip the full Guest Additions installation section
+GA_FLAG_FILE="/opt/vbox_ga_checked"
+
+# Create flag to indicate we've checked Guest Additions
+touch "$GA_FLAG_FILE" || echo "Warning: Failed to create flag file ${GA_FLAG_FILE}"
 
 # --- Configure LightDM for Autologin ---
 echo ">>> Configuring LightDM for autologin for user $USERNAME..."
