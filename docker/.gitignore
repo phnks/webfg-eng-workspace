@@ -1,0 +1,16 @@
+# Ignore user-specific files
+volumes/*/gitconfig
+volumes/*/workspace/
+volumes/*/.agent_type
+volumes/*/.agent.pid
+volumes/*/.agent.log
+
+# Ignore IDE files
+.idea/
+*.swp
+*.swo
+*~
+
+# Ignore test outputs
+test/test-results.txt
+test/*.log
