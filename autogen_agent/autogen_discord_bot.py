@@ -346,11 +346,21 @@ def create_llm_config() -> Dict[str, Any]:
         
     elif MODEL_PROVIDER == "claude":
         model = MODEL_NAME or "claude-opus-4"
-        # For Claude, we'll use a custom client
+        # For Claude, we'll use AutoGen's built-in Bedrock client
+        # Convert our model name to full Bedrock model ID
+        if model in ClaudeBedrockClient.MODEL_IDS:
+            bedrock_model_id = ClaudeBedrockClient.MODEL_IDS[model]
+        elif model.startswith("anthropic.claude"):
+            bedrock_model_id = model
+        else:
+            bedrock_model_id = ClaudeBedrockClient.MODEL_IDS["claude-opus-4"]
+            
         config_item = {
-            "model": model,
-            "api_key": "bedrock-placeholder",  # Not used by our client
-            "api_type": "claude-bedrock",
+            "model": bedrock_model_id,
+            "api_type": "bedrock",
+            "aws_region": os.getenv("BEDROCK_AWS_REGION", "us-west-2"),
+            "aws_access_key": os.getenv("BEDROCK_AWS_ACCESS_KEY_ID"),
+            "aws_secret_key": os.getenv("BEDROCK_AWS_SECRET_ACCESS_KEY"),
         }
         
     else:
@@ -361,14 +371,7 @@ def create_llm_config() -> Dict[str, Any]:
 
 llm_config = create_llm_config()
 _LOG.info(f"✅ LLM config created for {MODEL_PROVIDER} with model: {llm_config['config_list'][0]['model']}")
-# Create assistant with custom client for Claude
-if MODEL_PROVIDER == "claude":
-    # For Claude, we need to modify the llm_config to use our custom client
-    claude_model = llm_config["config_list"][0]["model"]
-    claude_client = ClaudeBedrockClient(model=claude_model)
-    
-    # Create a wrapper that AutoGen can use
-    llm_config["config_list"][0]["client"] = claude_client
+# Claude uses AutoGen's built-in Bedrock client, no custom setup needed
     
 assistant = autogen.AssistantAgent(
     name=BOT_USER,
