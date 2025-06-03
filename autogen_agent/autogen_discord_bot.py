@@ -1,6 +1,6 @@
 # filename: autogen_discord_bot.py
 from __future__ import annotations
-import asyncio, builtins, logging, os, re, shlex, subprocess, sys, textwrap, getpass, platform, random
+import asyncio, builtins, logging, os, re, shlex, subprocess, sys, tempfile, textwrap, getpass, platform, random
 from pathlib import Path
 from typing import List, Dict, Any
 import prompts.system as system_prompt_module
@@ -53,28 +53,62 @@ if not HOME_DIR.exists():
 # ---------------------------------------------------------------------------
 AGENT_HOME = os.getenv("AGENT_HOME")
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-USE_GEMINI = os.getenv("USE_GEMINI", "false").lower() == "true"
+
+# NEW: Flexible model configuration
+MODEL_PROVIDER = os.getenv("MODEL_PROVIDER", "openai").lower()
+MODEL_NAME = os.getenv("MODEL_NAME", "")
+
+# Legacy support: if USE_GEMINI is set, override MODEL_PROVIDER
+USE_GEMINI_LEGACY = os.getenv("USE_GEMINI", "false").lower() == "true"
+if USE_GEMINI_LEGACY:
+    MODEL_PROVIDER = "gemini"
+    _LOG.info("✅ Legacy USE_GEMINI detected, setting MODEL_PROVIDER=gemini")
+
+# Model-specific configuration
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GEMINI_API_KEYS: List[str] = [k.strip() for k in os.getenv("GEMINI_API_KEYS", "").split(",") if k.strip()]
+
+# Bedrock-specific AWS credentials (separate from project AWS credentials)
+BEDROCK_AWS_ACCESS_KEY_ID = os.getenv("BEDROCK_AWS_ACCESS_KEY_ID")
+BEDROCK_AWS_SECRET_ACCESS_KEY = os.getenv("BEDROCK_AWS_SECRET_ACCESS_KEY")
+BEDROCK_AWS_REGION = os.getenv("BEDROCK_AWS_REGION", "us-west-2")
+
 if not DISCORD_BOT_TOKEN:
     sys.exit("❌ DISCORD_BOT_TOKEN missing in .env")
-if USE_GEMINI and not GEMINI_API_KEYS:
-    sys.exit("❌ USE_GEMINI=true but no Gemini key(s) provided")
-if not USE_GEMINI and not OPENAI_API_KEY:
-    sys.exit("❌ Neither OPENAI_API_KEY nor USE_GEMINI=true provided")
+
+# Validate model provider configuration
+if MODEL_PROVIDER == "gemini" and not GEMINI_API_KEYS:
+    sys.exit("❌ MODEL_PROVIDER=gemini but no GEMINI_API_KEYS provided")
+if MODEL_PROVIDER == "openai" and not OPENAI_API_KEY:
+    sys.exit("❌ MODEL_PROVIDER=openai but no OPENAI_API_KEY provided")
+if MODEL_PROVIDER == "claude" and not (BEDROCK_AWS_ACCESS_KEY_ID and BEDROCK_AWS_SECRET_ACCESS_KEY):
+    _LOG.warning("⚠️ MODEL_PROVIDER=claude but Bedrock AWS credentials not fully set. Falling back to default AWS credentials.")
 
 # ---------------------------------------------------------------------------
-# 3) Gemini retry wrapper
+# 3) Model-specific setup
 # ---------------------------------------------------------------------------
 MAX_RECOVERY_ATTEMPTS = 3 # Total attempts: 1 initial + (MAX_RECOVERY_ATTEMPTS - 1) retries
 
-if USE_GEMINI:
+# Gemini setup
+if MODEL_PROVIDER == "gemini":
     from gemini_retry_wrapper import GeminiRetryWrapper
     import autogen.oai.gemini as _gm_autogen # Renamed to avoid conflict with _grw
     _gm_autogen.GeminiClient = _gm_autogen.Gemini = GeminiRetryWrapper
     GeminiRetryWrapper._KEYS = GEMINI_API_KEYS
     import gemini_retry_wrapper as _grw # Import the module itself as _grw for MAX_TOTAL_TOKENS
     _LOG.info("✅ GeminiRetryWrapper and _grw module configured.")
+
+# Claude Bedrock setup
+elif MODEL_PROVIDER == "claude":
+    from claude_bedrock_client import ClaudeBedrockClient
+    _LOG.info("✅ Claude Bedrock client imported.")
+
+# OpenAI setup (default, no additional setup needed)
+elif MODEL_PROVIDER == "openai":
+    _LOG.info("✅ Using OpenAI client (default).")
+
+else:
+    sys.exit(f"❌ Unsupported MODEL_PROVIDER: {MODEL_PROVIDER}. Supported: openai, gemini, claude")
 
 # ---------------------------------------------------------------------------
 # 4) Autogen / Discord imports
@@ -284,15 +318,58 @@ def only_assistant_can_end(msg: dict) -> bool:
         and msg.get("content", "").strip().upper() in {"TERMINATE", "DONE"}
     )
 
-llm_config = {
-    "temperature": 0.7,
-    "cache_seed": None,
-    "config_list": [{
-        "model": "gemini-2.5-pro-exp-03-25" if USE_GEMINI else "gpt-3.5-turbo",
-        "api_key": random.choice(GEMINI_API_KEYS) if USE_GEMINI else OPENAI_API_KEY,
-        "api_type": "google" if USE_GEMINI else "openai",
-    }],
-}
+# ---------------------------------------------------------------------------
+# Model configuration helper
+# ---------------------------------------------------------------------------
+def create_llm_config() -> Dict[str, Any]:
+    """Create LLM configuration based on MODEL_PROVIDER."""
+    base_config = {
+        "temperature": 0.7,
+        "cache_seed": None,
+    }
+    
+    if MODEL_PROVIDER == "openai":
+        model = MODEL_NAME or "gpt-4o"
+        config_item = {
+            "model": model,
+            "api_key": OPENAI_API_KEY,
+            "api_type": "openai",
+        }
+        
+    elif MODEL_PROVIDER == "gemini":
+        model = MODEL_NAME or "gemini-2.5-pro-exp-03-25"
+        config_item = {
+            "model": model,
+            "api_key": random.choice(GEMINI_API_KEYS),
+            "api_type": "google",
+        }
+        
+    elif MODEL_PROVIDER == "claude":
+        model = MODEL_NAME or "claude-opus-4"
+        # For Claude, we'll use a custom client
+        config_item = {
+            "model": model,
+            "api_key": "bedrock-placeholder",  # Not used by our client
+            "api_type": "claude-bedrock",
+        }
+        
+    else:
+        raise ValueError(f"Unsupported MODEL_PROVIDER: {MODEL_PROVIDER}")
+    
+    base_config["config_list"] = [config_item]
+    return base_config
+
+llm_config = create_llm_config()
+_LOG.info(f"✅ LLM config created for {MODEL_PROVIDER} with model: {llm_config['config_list'][0]['model']}")
+# Create assistant with custom client for Claude
+if MODEL_PROVIDER == "claude":
+    # For Claude, we need to modify the llm_config to use our custom client
+    claude_model = llm_config["config_list"][0]["model"]
+    claude_client = ClaudeBedrockClient(model=claude_model)
+    
+    # Create a wrapper that AutoGen can use
+    llm_config["config_list"][0]["client"] = claude_client
+    
 assistant = autogen.AssistantAgent(
     name=BOT_USER,
     llm_config=llm_config,
@@ -444,7 +521,7 @@ async def _handle_request(ch: discord.abc.Messageable, original_content: str):
                 elif "Google GenAI exception occurred" in error_message and "API key not valid" in error_message:
                     _LOG.error(f"Attempt {attempt} (API key not valid). Preparing for retry {attempt + 1}.")
                     
-                    if USE_GEMINI and GEMINI_API_KEYS:
+                    if MODEL_PROVIDER == "gemini" and GEMINI_API_KEYS:
                         if len(GEMINI_API_KEYS) <= 1:
                             _LOG.warning(f"Attempt {attempt}: Only one or zero Gemini API keys configured. Cannot switch to a different key.")
                             await ch.send(f"⚠️ AI API key error (attempt {attempt}/{MAX_RECOVERY_ATTEMPTS}). Only one key available, cannot switch. This error may persist.")
@@ -480,28 +557,28 @@ async def _handle_request(ch: discord.abc.Messageable, original_content: str):
                       re.search(r"input token count \(\d+\) exceeds", error_message, re.IGNORECASE)):
                     _LOG.info(f"Attempt {attempt} (Token limit error). Preparing for retry {attempt + 1} with pruning.")
                     
-                    if USE_GEMINI:
+                    if MODEL_PROVIDER == "gemini":
                         #await ch.send(
                         #    f"⚠️ Conversation too large for Gemini (attempt {attempt}/{MAX_RECOVERY_ATTEMPTS}). "
                         #    "Pruning and retrying..."
                         #)
                         try:
-                            # _grw should be available from top-level import if USE_GEMINI is true
+                            # _grw should be available from top-level import if MODEL_PROVIDER is gemini
                             current_max_tokens = getattr(_grw, 'MAX_TOTAL_TOKENS', 1000000) # Default if not set
                             _grw.MAX_TOTAL_TOKENS = max(256_000, int(current_max_tokens * 0.8))
                             _LOG.info(f"Tightened Gemini token budget for attempt {attempt + 1}. New MAX_TOTAL_TOKENS: {_grw.MAX_TOTAL_TOKENS}")
                             current_content = original_content 
                             recovered_for_next_attempt = True
                         except NameError: 
-                            _LOG.error("gemini_retry_wrapper module (_grw) not found, though USE_GEMINI is true. Cannot adjust token budget.")
+                            _LOG.error("gemini_retry_wrapper module (_grw) not found, though MODEL_PROVIDER is gemini. Cannot adjust token budget.")
                             await ch.send("⚠️ Internal error: Could not adjust token budget (module not found).")
                         except AttributeError:
                             _LOG.error("gemini_retry_wrapper does not have MAX_TOTAL_TOKENS attribute.")
                             await ch.send("⚠️ Internal error: Could not adjust token budget (attribute missing).")
                     else: 
-                        _LOG.warning(f"Attempt {attempt}: Token limit error for non-Gemini model. No specific recovery for this. Error: {error_message[:100]}")
-                        await ch.send(f"⚠️ Conversation too large for AI model. No specific pruning defined for this model.")
-                        # For non-Gemini, no specific recovery, will fall through to D.
+                        _LOG.warning(f"Attempt {attempt}: Token limit error for {MODEL_PROVIDER} model. No specific recovery for this. Error: {error_message[:100]}")
+                        await ch.send(f"⚠️ Conversation too large for AI model. No specific pruning defined for {MODEL_PROVIDER}.")
+                        # For non-Gemini models, no specific recovery, will fall through to D.
 
                 if recovered_for_next_attempt:
                     _LOG.info(f"Proceeding to attempt {attempt + 1} after applying recovery strategy for: {error_message[:70]}...")

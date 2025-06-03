@@ -253,6 +253,11 @@ if [ -f "/home/$USERNAME/.bashrc" ]; then
         OPENAI_API_KEY=""
         GEMINI_API_KEYS=""
         USE_GEMINI=""
+        MODEL_PROVIDER=""
+        MODEL_NAME=""
+        BEDROCK_AWS_ACCESS_KEY_ID=""
+        BEDROCK_AWS_SECRET_ACCESS_KEY=""
+        BEDROCK_AWS_REGION=""
         DISCORD_BOT_TOKEN=""
 
         if [ -f "$HOST_ENV_FILE" ]; then
@@ -269,6 +274,11 @@ if [ -f "/home/$USERNAME/.bashrc" ]; then
             OPENAI_API_KEY=$(grep '^OPENAI_API_KEY=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
             GEMINI_API_KEYS=$(grep '^GEMINI_API_KEYS=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
             USE_GEMINI=$(grep '^USE_GEMINI=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
+            MODEL_PROVIDER=$(grep '^MODEL_PROVIDER=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
+            MODEL_NAME=$(grep '^MODEL_NAME=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
+            BEDROCK_AWS_ACCESS_KEY_ID=$(grep '^BEDROCK_AWS_ACCESS_KEY_ID=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
+            BEDROCK_AWS_SECRET_ACCESS_KEY=$(grep '^BEDROCK_AWS_SECRET_ACCESS_KEY=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
+            BEDROCK_AWS_REGION=$(grep '^BEDROCK_AWS_REGION=' "$HOST_ENV_FILE" | cut -d '=' -f2-)
 
             # Extract the specific bot token for this user
             USER_BOT_TOKEN_KEY="BOT_TOKEN_$USERNAME"
@@ -302,13 +312,22 @@ AWS_REGION=$AWS_REGION
 AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION
 AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID
 
+# --- Model Configuration ---
+MODEL_PROVIDER=$MODEL_PROVIDER
+MODEL_NAME=$MODEL_NAME
+
 # --- OpenAI Configuration ---
 OPENAI_API_KEY=$OPENAI_API_KEY
 
 # --- Gemini Configuration ---
 GEMINI_API_KEYS=$GEMINI_API_KEYS
-# Set to "true" to use Gemini, "false" or omit to use OpenAI
+# Legacy support (deprecated - use MODEL_PROVIDER instead)
 USE_GEMINI=$USE_GEMINI
+
+# --- Claude Bedrock Configuration ---
+BEDROCK_AWS_ACCESS_KEY_ID=$BEDROCK_AWS_ACCESS_KEY_ID
+BEDROCK_AWS_SECRET_ACCESS_KEY=$BEDROCK_AWS_SECRET_ACCESS_KEY
+BEDROCK_AWS_REGION=$BEDROCK_AWS_REGION
 EOF
 
             echo ".env file generated at $VM_ENV_FILE"
@@ -353,9 +372,14 @@ EOF
         add_to_bashrc "AWS_REGION" "$AWS_REGION"
         add_to_bashrc "AWS_DEFAULT_REGION" "$AWS_DEFAULT_REGION"
         add_to_bashrc "AWS_ACCOUNT_ID" "$AWS_ACCOUNT_ID"
+        add_to_bashrc "MODEL_PROVIDER" "$MODEL_PROVIDER"
+        add_to_bashrc "MODEL_NAME" "$MODEL_NAME"
         add_to_bashrc "OPENAI_API_KEY" "$OPENAI_API_KEY"
         add_to_bashrc "GEMINI_API_KEYS" "$GEMINI_API_KEYS"
         add_to_bashrc "USE_GEMINI" "$USE_GEMINI"
+        add_to_bashrc "BEDROCK_AWS_ACCESS_KEY_ID" "$BEDROCK_AWS_ACCESS_KEY_ID"
+        add_to_bashrc "BEDROCK_AWS_SECRET_ACCESS_KEY" "$BEDROCK_AWS_SECRET_ACCESS_KEY"
+        add_to_bashrc "BEDROCK_AWS_REGION" "$BEDROCK_AWS_REGION"
 
         # Ensure ownership after modifications
         chown "$USERNAME:$USERNAME" "$BASHRC_FILE" || echo "Warning: Failed to chown $BASHRC_FILE after adding env vars."
@@ -415,9 +439,14 @@ EOF
     add_to_etc_environment "AWS_REGION" "$AWS_REGION"
     add_to_etc_environment "AWS_DEFAULT_REGION" "$AWS_DEFAULT_REGION"
     add_to_etc_environment "AWS_ACCOUNT_ID" "$AWS_ACCOUNT_ID"
+    add_to_etc_environment "MODEL_PROVIDER" "$MODEL_PROVIDER"
+    add_to_etc_environment "MODEL_NAME" "$MODEL_NAME"
     add_to_etc_environment "OPENAI_API_KEY" "$OPENAI_API_KEY"
     add_to_etc_environment "GEMINI_API_KEYS" "$GEMINI_API_KEYS"
     add_to_etc_environment "USE_GEMINI" "$USE_GEMINI"
+    add_to_etc_environment "BEDROCK_AWS_ACCESS_KEY_ID" "$BEDROCK_AWS_ACCESS_KEY_ID"
+    add_to_etc_environment "BEDROCK_AWS_SECRET_ACCESS_KEY" "$BEDROCK_AWS_SECRET_ACCESS_KEY"
+    add_to_etc_environment "BEDROCK_AWS_REGION" "$BEDROCK_AWS_REGION"
 
     echo "System-wide environment variables checked/added to /etc/environment."
     # --- End System/User Env Var Setup ---
@@ -458,9 +487,14 @@ Environment=\"AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY\"
 Environment=\"AWS_REGION=$AWS_REGION\"
 Environment=\"AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION\"
 Environment=\"AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID\"
+Environment=\"MODEL_PROVIDER=$MODEL_PROVIDER\"
+Environment=\"MODEL_NAME=$MODEL_NAME\"
 Environment=\"OPENAI_API_KEY=$OPENAI_API_KEY\"
 Environment=\"GEMINI_API_KEYS=$GEMINI_API_KEYS\"
 Environment=\"USE_GEMINI=$USE_GEMINI\"
+Environment=\"BEDROCK_AWS_ACCESS_KEY_ID=$BEDROCK_AWS_ACCESS_KEY_ID\"
+Environment=\"BEDROCK_AWS_SECRET_ACCESS_KEY=$BEDROCK_AWS_SECRET_ACCESS_KEY\"
+Environment=\"BEDROCK_AWS_REGION=$BEDROCK_AWS_REGION\"
 # Add a small delay before starting, just in case of network race conditions
 ExecStartPre=/bin/sleep 5
 # Explicitly activate venv and then run the start script using its full path
