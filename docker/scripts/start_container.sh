@@ -28,10 +28,23 @@ fi
 BOT_TOKEN_VAR="BOT_TOKEN_${USERNAME}"
 BOT_TOKEN=$(grep "^${BOT_TOKEN_VAR}=" "$DOCKER_DIR/.env" | cut -d'=' -f2-)
 
+# Detect which docker compose command to use
+if command -v docker &> /dev/null && docker compose version &> /dev/null; then
+    COMPOSE_CMD="docker compose"
+    echo "Using Docker Compose v2 (docker compose)"
+elif command -v docker-compose &> /dev/null; then
+    COMPOSE_CMD="docker-compose"
+    echo "Using Docker Compose v1 (docker-compose)"
+else
+    echo "Error: Neither 'docker compose' nor 'docker-compose' found"
+    echo "Please install Docker Compose. Run: $SCRIPT_DIR/upgrade_docker_compose.sh"
+    exit 1
+fi
+
 # Start the container with dynamic environment variables
 cd "$DOCKER_DIR"
 USERNAME=$USERNAME BOT_TOKEN=$BOT_TOKEN \
-docker-compose --env-file "$DOCKER_DIR/.env" up -d
+$COMPOSE_CMD --env-file "$DOCKER_DIR/.env" up -d
 
 # Wait for container to be ready
 echo "Waiting for container to be ready..."
@@ -46,6 +59,6 @@ if docker ps | grep -q "agent-$USERNAME"; then
     echo "To enter container: $SCRIPT_DIR/enter_container.sh $USERNAME"
 else
     echo "Error: Container failed to start"
-    docker-compose -f "$DOCKER_DIR/docker-compose.$USERNAME.yml" logs
+    $COMPOSE_CMD logs
     exit 1
 fi
