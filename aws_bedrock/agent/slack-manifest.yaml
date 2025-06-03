@@ -1,0 +1,40 @@
+display_information:
+  name: Coding Agent
+  description: An AI coding assistant for WebFG developers
+  background_color: "#2C2D30"
+
+features:
+  app_home:
+    home_tab_enabled: true
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: Coding Agent
+    always_online: true
+
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - channels:history
+      - channels:read
+      - chat:write
+      - files:write
+      - im:history
+      - im:read
+      - im:write
+      - users:read
+
+settings:
+  event_subscriptions:
+    request_url: ${WebhookUrl}
+    bot_events:
+      - app_mention
+      - message.im
+  interactivity:
+    is_enabled: true
+    request_url: ${WebhookUrl}
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  is_hosted: false
+  token_rotation_enabled: false

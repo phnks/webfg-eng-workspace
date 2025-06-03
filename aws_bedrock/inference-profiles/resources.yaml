@@ -1,0 +1,68 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Inference profiles for WebFG Coding Agent'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, qa, prod]
+    Description: Environment for deployment
+
+Resources:
+  # Define inference profiles for foundation models we'll use with our agent
+  CodingAgentInferenceProfile:
+    Type: AWS::Bedrock::InferenceProfile
+    Properties:
+      Name: !Sub "coding-agent-inference-profile-${Environment}"
+      InferenceProfileName: !Sub "coding-agent-inference-profile-${Environment}"
+      ModelConfiguration:
+        ModelId: "anthropic.claude-3-5-sonnet-20240620-v1:0"
+      InvokerPolicyConfiguration:
+        Action:
+          - "bedrock:InvokeModel"
+        ResourcePolicy:
+          Principal:
+            - "*" # Restrict this in a production environment
+          Condition:
+            StringEquals:
+              "aws:PrincipalAccount": !Ref "AWS::AccountId"
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+  CodingAgentEmbeddingProfile:
+    Type: AWS::Bedrock::InferenceProfile
+    Properties:
+      Name: !Sub "coding-agent-embedding-profile-${Environment}"
+      InferenceProfileName: !Sub "coding-agent-embedding-profile-${Environment}"
+      ModelConfiguration:
+        ModelId: "amazon.titan-embed-text-v2:0"
+      InvokerPolicyConfiguration:
+        Action:
+          - "bedrock:InvokeModel"
+        ResourcePolicy:
+          Principal:
+            - "*" # Restrict this in a production environment
+          Condition:
+            StringEquals:
+              "aws:PrincipalAccount": !Ref "AWS::AccountId"
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+Outputs:
+  CodingAgentInferenceProfileArn:
+    Description: ARN of Coding Agent Inference Profile
+    Value: !GetAtt CodingAgentInferenceProfile.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-InferenceProfileArn"
+
+  CodingAgentEmbeddingProfileArn:
+    Description: ARN of Coding Agent Embedding Profile
+    Value: !GetAtt CodingAgentEmbeddingProfile.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-EmbeddingProfileArn"
