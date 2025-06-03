@@ -1,6 +1,6 @@
 # AWS Bedrock Coding Agent
 
-This directory contains the AWS Bedrock agent setup for the WebFG coding assistant. The agent is designed to help developers with coding tasks through a conversational interface.
+This directory contains the AWS Bedrock agent setup for the WebFG coding assistant. The agent is designed to help developers with coding tasks through a conversational interface. The implementation uses CloudFormation templates and direct AWS CLI commands for resources not yet supported by CloudFormation.
 
 ## Architecture
 
@@ -10,6 +10,8 @@ The Coding Agent consists of several components:
 2. **Knowledge Base** - Programming documentation stored in Amazon OpenSearch Serverless
 3. **Lambda Functions** - Custom tools for code search, analysis, and documentation lookup
 4. **Slack Integration** - Interface for users to interact with the agent
+5. **Inference Profiles** - Custom configurations for the foundation model
+6. **Guardrails** - Safety mechanisms to ensure responsible AI usage
 
 ## Directory Structure
 
@@ -21,16 +23,22 @@ aws_bedrock/
 ├── inference-profiles/    # Model configurations
 ├── knowledge-base/        # Knowledge base configuration
 ├── scripts/               # Deployment and management scripts
+│   ├── create_inference_profile.sh  # Create model profiles via direct API
+│   ├── delete_agent.sh              # Remove agent and resources
+│   ├── delete_inference_profile.sh  # Remove inference profiles
+│   ├── deploy_agent.sh              # Deploy full agent stack
+│   └── update_agent.sh              # Update existing agent
 └── test/                  # Test scripts
+    └── test-bedrock-api.sh          # Test AWS API access
 ```
 
 ## Deployment
 
 ### Prerequisites
 
-- AWS CLI v2.13.0+ configured with appropriate permissions
-- SAM CLI installed
-- Access to AWS Bedrock and necessary models
+- AWS CLI v2.27.0+ configured with appropriate permissions
+- Access to AWS Bedrock and necessary models (Claude 3.5 Sonnet and Claude 3 Haiku)
+- IAM permissions for Bedrock, Lambda, IAM, S3, CloudFormation, and Secrets Manager
 
 ### Deployment Steps
 
@@ -60,16 +68,17 @@ aws_bedrock/
 
 ## Testing
 
-Run the automated tests to verify your deployment:
+Run the included test script to verify AWS Bedrock API access:
 
 ```bash
-cd test
-./test-all.sh [environment]
+cd aws_bedrock/test
+./test-bedrock-api.sh
 ```
 
-Individual test scripts are also available:
-- `test-agent-deployment.sh` - Validates CloudFormation templates
-- `test-agent-functionality.sh` - Tests agent responses to various prompts
+This test script verifies:
+- Access to AWS Bedrock APIs
+- Availability of required foundation models (Claude 3.5 Sonnet and Claude 3 Haiku)
+- Proper SSM parameter store access for configuration management
 
 ## Lambda Functions
 
@@ -113,3 +122,12 @@ Each environment uses a separate set of resources and can be managed independent
 - Lambda functions include input validation to prevent command injection
 - IAM roles follow least privilege principle
 - Slack verification ensures requests come from authorized sources
+- Slack API tokens are stored securely in AWS Secrets Manager
+- CloudFormation templates use custom resources with appropriate IAM permissions
+
+## Implementation Notes
+
+- AWS Bedrock resources that aren't directly supported in CloudFormation (like InferenceProfiles) are managed through direct AWS CLI commands
+- Custom resources with Lambda functions are used to create Bedrock agents and guardrails through CloudFormation
+- Deployment scripts handle the hybrid approach of using both CloudFormation and direct API calls
+- Lambda functions are packaged and deployed through CloudFormation with code updates happening post-deployment

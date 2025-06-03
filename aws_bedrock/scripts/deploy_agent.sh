@@ -18,39 +18,23 @@ fi
 
 echo "Deploying WebFG Coding Agent to $ENV environment..."
 
-# Step 1: Deploy inference profiles
-echo "Deploying inference profiles..."
-cd "$PARENT_DIR/inference-profiles"
-if [ "$ENV" = "dev" ] || [ "$ENV" = "qa" ]; then
-    aws cloudformation deploy \
-        --template-file resources-qa.yaml \
-        --stack-name coding-inference-profiles-$ENV \
-        --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-        --parameter-overrides Environment=$ENV
-else
-    aws cloudformation deploy \
-        --template-file resources.yaml \
-        --stack-name coding-inference-profiles-$ENV \
-        --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-        --parameter-overrides Environment=$ENV
-fi
+# Step 1: Create inference profiles using direct API calls
+echo "Creating inference profiles..."
+bash "$SCRIPT_DIR/create_inference_profile.sh" "$ENV"
 
-# Step 2: Deploy knowledge base
+# Step 2: Deploy knowledge base CloudFormation stack
 echo "Deploying knowledge base..."
 cd "$PARENT_DIR/knowledge-base"
+KNOWLEDGE_BASE_TEMPLATE="resources.yaml"
 if [ "$ENV" = "dev" ] || [ "$ENV" = "qa" ]; then
-    aws cloudformation deploy \
-        --template-file resources-qa.yaml \
-        --stack-name coding-agent-knowledge-base-$ENV \
-        --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-        --parameter-overrides Environment=$ENV
-else
-    aws cloudformation deploy \
-        --template-file resources.yaml \
-        --stack-name coding-agent-knowledge-base-$ENV \
-        --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-        --parameter-overrides Environment=$ENV
+    KNOWLEDGE_BASE_TEMPLATE="resources-qa.yaml"
 fi
+
+aws cloudformation deploy \
+    --template-file "$KNOWLEDGE_BASE_TEMPLATE" \
+    --stack-name coding-agent-knowledge-base-$ENV \
+    --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+    --parameter-overrides Environment=$ENV
 
 # Step 3: Upload documentation files
 echo "Uploading documentation and instructions..."
@@ -73,7 +57,10 @@ aws s3 sync "$PARENT_DIR/temp_upload/" "s3://$BUCKET_NAME/" --delete
 # Clean up temp directory
 rm -rf "$PARENT_DIR/temp_upload"
 
-# Step 4: Deploy agent
+# Get Knowledge Base ID from CloudFormation output
+KNOWLEDGE_BASE_ID=$(aws cloudformation describe-stacks --stack-name coding-agent-knowledge-base-$ENV --query "Stacks[0].Outputs[?OutputKey=='KnowledgeBaseId'].OutputValue" --output text)
+
+# Step 4: Deploy agent CloudFormation stack
 echo "Deploying WebFG Coding Agent..."
 cd "$PARENT_DIR/agent"
 
@@ -100,19 +87,24 @@ zip -r "$PARENT_DIR/temp_lambdas/slack_handler.zip" .
 
 # Deploy the agent with packaged code
 cd "$PARENT_DIR/agent"
+AGENT_TEMPLATE="resources.yaml"
 if [ "$ENV" = "dev" ] || [ "$ENV" = "qa" ]; then
-    aws cloudformation deploy \
-        --template-file resources-qa.yaml \
-        --stack-name coding-agent-$ENV \
-        --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
-        --parameter-overrides Environment=$ENV
-else
-    aws cloudformation deploy \
-        --template-file resources.yaml \
-        --stack-name coding-agent-$ENV \
-        --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
-        --parameter-overrides Environment=$ENV
+    AGENT_TEMPLATE="resources-qa.yaml"
 fi
+
+# Get inference profile ARNs from SSM
+INFERENCE_PROFILE_ARN=$(aws ssm get-parameter --name "/coding-agent/$ENV/inference-profile-arn" --query "Parameter.Value" --output text)
+EMBEDDING_PROFILE_ARN=$(aws ssm get-parameter --name "/coding-agent/$ENV/embedding-profile-arn" --query "Parameter.Value" --output text)
+
+# Deploy agent CloudFormation stack with profile ARNs
+aws cloudformation deploy \
+    --template-file "$AGENT_TEMPLATE" \
+    --stack-name coding-agent-$ENV \
+    --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
+    --parameter-overrides \
+        Environment=$ENV \
+        InferenceProfileArn=$INFERENCE_PROFILE_ARN \
+        KnowledgeBaseId=$KNOWLEDGE_BASE_ID
 
 # Update Lambda code after stack is created
 echo "Updating Lambda functions with actual code..."

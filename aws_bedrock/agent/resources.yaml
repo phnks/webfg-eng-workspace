@@ -7,6 +7,14 @@ Parameters:
     Default: prod
     AllowedValues: [prod]
     Description: Environment for deployment
+    
+  InferenceProfileArn:
+    Type: String
+    Description: ARN of the inference profile for the agent
+    
+  KnowledgeBaseId:
+    Type: String
+    Description: ID of the knowledge base for the agent
 
 Resources:
   # IAM Role for Lambda functions
@@ -100,8 +108,7 @@ Resources:
       MemorySize: 256
       Environment:
         Variables:
-          KNOWLEDGE_BASE_ID: !ImportValue 
-            Fn::Sub: "coding-agent-knowledge-base-${Environment}-KnowledgeBaseId"
+          KNOWLEDGE_BASE_ID: !Ref KnowledgeBaseId
       Code:
         ZipFile: |
           # This is a placeholder. The actual code will be deployed from a deployment package.
@@ -149,181 +156,684 @@ Resources:
 
   # AWS Bedrock Guardrail
   CodingAgentGuardrail:
-    Type: AWS::Bedrock::Guardrail
+    Type: AWS::CloudFormation::CustomResource
     Properties:
-      Name: !Sub "coding-agent-guardrail-${Environment}"
-      Description: "Guardrail for WebFG Coding Agent to ensure safe interactions"
-      GuardrailConfiguration:
-        Version: "DRAFT"
-        ContentPolicyConfig:
-          FiltersConfig:
-            Filters:
-              - Type: INSULTS
-                Strength: HIGH
-              - Type: HATE
-                Strength: HIGH
-              - Type: SEXUAL
-                Strength: HIGH
-              - Type: VIOLENCE
-                Strength: HIGH
-          TopicsConfig:
-            Definitions:
-              - Name: "FinancialAdvice"
-                Description: "Financial advice and recommendations"
-              - Name: "LegalAdvice"
-                Description: "Legal advice and recommendations"
-              - Name: "SecurityRisks"
-                Description: "Content that could pose security risks"
-            Topics:
-              - Name: "FinancialAdvice"
-                Type: DENY
-              - Name: "LegalAdvice"
-                Type: DENY
-              - Name: "SecurityRisks"
-                Type: DENY
-        WordPolicyConfig:
-          ManagedWordLists:
-            - Type: PROFANITY
-          Words:
-            - Text: "sudo rm -rf /"
-              Type: DENY
-            - Text: "rm -rf"
-              Type: DENY
-            - Text: "curl | bash"
-              Type: DENY
-            - Text: "wget | bash"
-              Type: DENY
+      ServiceToken: !GetAtt CreateGuardrailFunction.Arn
+      GuardrailName: !Sub "coding-agent-guardrail-${Environment}"
+      GuardrailDescription: "Guardrail for WebFG Coding Agent to ensure safe interactions"
+      Environment: !Ref Environment
+
+  # Lambda function to create guardrail (since CloudFormation doesn't support it directly)
+  CreateGuardrailFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "coding-agent-create-guardrail-${Environment}"
+      Runtime: python3.10
+      Handler: index.lambda_handler
+      Role: !GetAtt GuardrailCreationRole.Arn
+      Timeout: 60
+      MemorySize: 256
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import json
+          import time
+          import uuid
+          
+          def lambda_handler(event, context):
+              print(f"Event: {json.dumps(event)}")
+              
+              # Setup response data
+              response_data = {}
+              
+              try:
+                  request_type = event['RequestType']
+                  properties = event['ResourceProperties']
+                  guardrail_name = properties.get('GuardrailName')
+                  guardrail_description = properties.get('GuardrailDescription')
+                  environment = properties.get('Environment')
+                  
+                  bedrock_client = boto3.client('bedrock')
+                  
+                  # Handle resource creation or update
+                  if request_type == 'Create' or request_type == 'Update':
+                      # Create guardrail
+                      print(f"Creating guardrail {guardrail_name}...")
+                      
+                      try:
+                          # Check if guardrail already exists
+                          existing_guardrails = bedrock_client.list_guardrails(
+                              filters=[{'name': 'name', 'operator': 'equals', 'values': [guardrail_name]}]
+                          )
+                          
+                          guardrail_id = None
+                          
+                          if existing_guardrails.get('guardrailSummaries'):
+                              for guardrail in existing_guardrails.get('guardrailSummaries'):
+                                  if guardrail.get('name') == guardrail_name:
+                                      guardrail_id = guardrail.get('id')
+                                      print(f"Found existing guardrail with ID: {guardrail_id}")
+                                      break
+                          
+                          # If guardrail doesn't exist, create it
+                          if not guardrail_id:
+                              create_response = bedrock_client.create_guardrail(
+                                  name=guardrail_name,
+                                  description=guardrail_description,
+                                  version='DRAFT',
+                                  contentPolicyConfig={
+                                      'filtersConfig': {
+                                          'filters': [
+                                              {'type': 'INSULTS', 'strength': 'HIGH'},
+                                              {'type': 'HATE', 'strength': 'HIGH'},
+                                              {'type': 'SEXUAL', 'strength': 'HIGH'},
+                                              {'type': 'VIOLENCE', 'strength': 'HIGH'}
+                                          ]
+                                      },
+                                      'topicsPolicy': {
+                                          'topics': [
+                                              {'name': 'FinancialAdvice', 'type': 'DENY'},
+                                              {'name': 'LegalAdvice', 'type': 'DENY'},
+                                              {'name': 'SecurityRisks', 'type': 'DENY'}
+                                          ]
+                                      }
+                                  },
+                                  wordPolicyConfig={
+                                      'managedWordLists': [{'type': 'PROFANITY'}],
+                                      'words': [
+                                          {'text': 'sudo rm -rf /', 'type': 'DENY'},
+                                          {'text': 'rm -rf', 'type': 'DENY'},
+                                          {'text': 'curl | bash', 'type': 'DENY'},
+                                          {'text': 'wget | bash', 'type': 'DENY'}
+                                      ]
+                                  },
+                                  tags=[
+                                      {'key': 'Environment', 'value': environment},
+                                      {'key': 'Project', 'value': 'WebFG-Coding-Agent'}
+                                  ]
+                              )
+                              
+                              guardrail_id = create_response.get('id')
+                              print(f"Created guardrail with ID: {guardrail_id}")
+                          
+                          response_data['GuardrailId'] = guardrail_id
+                          response_data['GuardrailARN'] = f"arn:aws:bedrock:{context.invoked_function_arn.split(':')[3]}:{context.invoked_function_arn.split(':')[4]}:guardrail/{guardrail_id}"
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+                      
+                      except Exception as e:
+                          print(f"Error creating guardrail: {str(e)}")
+                          cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+                  
+                  # Handle resource deletion
+                  elif request_type == 'Delete':
+                      try:
+                          # Check if guardrail exists
+                          existing_guardrails = bedrock_client.list_guardrails(
+                              filters=[{'name': 'name', 'operator': 'equals', 'values': [guardrail_name]}]
+                          )
+                          
+                          for guardrail in existing_guardrails.get('guardrailSummaries', []):
+                              if guardrail.get('name') == guardrail_name:
+                                  guardrail_id = guardrail.get('id')
+                                  print(f"Deleting guardrail with ID: {guardrail_id}")
+                                  bedrock_client.delete_guardrail(id=guardrail_id)
+                                  print(f"Guardrail {guardrail_id} deleted successfully")
+                                  break
+                          
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      
+                      except Exception as e:
+                          print(f"Error deleting guardrail: {str(e)}")
+                          # If the resource is already deleted, we still want to return success
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  else:
+                      cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': f'Unsupported request type: {request_type}'})
+                  
+              except Exception as e:
+                  print(f"Unexpected error: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
       Tags:
         - Key: Environment
           Value: !Ref Environment
         - Key: Project
           Value: WebFG-Coding-Agent
 
-  # AWS Bedrock Agent
+  # IAM Role for guardrail creation Lambda
+  GuardrailCreationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: BedrockGuardrailAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'bedrock:CreateGuardrail'
+                  - 'bedrock:DeleteGuardrail'
+                  - 'bedrock:ListGuardrails'
+                Resource: '*'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+  # Bedrock Agent - Create via CustomResource
   CodingAgent:
-    Type: AWS::Bedrock::Agent
+    Type: AWS::CloudFormation::CustomResource
     Properties:
+      ServiceToken: !GetAtt CreateAgentFunction.Arn
       AgentName: !Sub "coding-agent-${Environment}"
-      Description: "WebFG Coding Assistant for software development tasks"
-      InstructionConfig:
-        InstructionSourceConfiguration:
-          InstructionSource:
-            S3InstructionSourceConfiguration:
-              S3BucketName: !ImportValue 
-                Fn::Sub: "coding-agent-knowledge-base-${Environment}-DocumentsBucketName"
-              S3ObjectKey: "instructions/coding-agent-instruction.md"
-      FoundationModel: !ImportValue 
-        Fn::Sub: "coding-inference-profiles-${Environment}-InferenceProfileArn"
-      ActionGroups:
-        - ActionGroupName: "CodeAssistTools"
-          Description: "Tools for code search, analysis, and documentation"
-          ActionGroupExecutor:
-            Lambda:
-              - ActionName: "CodeRepositorySearch"
-                Description: "Search code repositories for patterns or files"
-                LambdaArn: !GetAtt CodeRepositorySearchLambda.Arn
-                ParameterSchema:
-                  JsonSchema:
-                    Type: "object"
-                    Properties:
-                      query:
-                        Type: "string"
-                        Description: "The search query (e.g., function name, pattern)"
-                      repo_path:
-                        Type: "string"
-                        Description: "Optional path to narrow the search"
-                      language:
-                        Type: "string"
-                        Description: "Optional language filter (e.g., python, javascript)"
-                      max_results:
-                        Type: "integer"
-                        Description: "Maximum number of results to return (default: 10)"
-                    Required:
-                      - "query"
-              - ActionName: "CodeAnalysis"
-                Description: "Analyze code to provide insights about structure and quality"
-                LambdaArn: !GetAtt CodeAnalysisLambda.Arn
-                ParameterSchema:
-                  JsonSchema:
-                    Type: "object"
-                    Properties:
-                      file_path:
-                        Type: "string"
-                        Description: "Path to the file to analyze"
-                      language:
-                        Type: "string"
-                        Description: "Language of the code (e.g., python, javascript)"
-                      analysis_type:
-                        Type: "string"
-                        Description: "Type of analysis to perform (structure, quality, security, all)"
-                        Enum:
-                          - "structure"
-                          - "quality"
-                          - "security"
-                          - "all"
-                    Required:
-                      - "file_path"
-              - ActionName: "DocumentSearch"
-                Description: "Search documentation for relevant information"
-                LambdaArn: !GetAtt DocumentSearchLambda.Arn
-                ParameterSchema:
-                  JsonSchema:
-                    Type: "object"
-                    Properties:
-                      query:
-                        Type: "string"
-                        Description: "The search query"
-                      doc_type:
-                        Type: "string"
-                        Description: "Optional documentation type filter"
-                      max_results:
-                        Type: "integer"
-                        Description: "Maximum number of results to return (default: 5)"
-                    Required:
-                      - "query"
-      CustomerEncryptionKeyArn: ""
-      IdleSessionTTLInSeconds: 300
-      RoleArn: !GetAtt CodingAgentRole.Arn
-      KnowledgeBases:
-        - KnowledgeBaseId: !ImportValue 
-            Fn::Sub: "coding-agent-knowledge-base-${Environment}-KnowledgeBaseId"
-          Description: "Programming documentation and code examples"
-      GuardrailConfiguration:
-        GuardrailIdentifier: !GetAtt CodingAgentGuardrail.Arn
-        GuardrailVersion: "DRAFT"
+      AgentDescription: "WebFG Coding Assistant for software development tasks"
+      InferenceProfileArn: !Ref InferenceProfileArn
+      KnowledgeBaseId: !Ref KnowledgeBaseId
+      GuardrailId: !GetAtt CodingAgentGuardrail.GuardrailId
+      CodeRepositorySearchLambdaArn: !GetAtt CodeRepositorySearchLambda.Arn
+      CodeAnalysisLambdaArn: !GetAtt CodeAnalysisLambda.Arn
+      DocumentSearchLambdaArn: !GetAtt DocumentSearchLambda.Arn
+      S3BucketName: !ImportValue 
+        Fn::Sub: "coding-agent-knowledge-base-${Environment}-DocumentsBucketName"
+      AgentRoleArn: !GetAtt CodingAgentRole.Arn
+      Environment: !Ref Environment
+    DependsOn: CodingAgentGuardrail
+
+  # Lambda function to create agent (since CloudFormation doesn't support it directly)
+  CreateAgentFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "coding-agent-create-agent-${Environment}"
+      Runtime: python3.10
+      Handler: index.lambda_handler
+      Role: !GetAtt AgentCreationRole.Arn
+      Timeout: 300
+      MemorySize: 256
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import json
+          import time
+          import uuid
+          
+          def lambda_handler(event, context):
+              print(f"Event: {json.dumps(event)}")
+              
+              # Setup response data
+              response_data = {}
+              
+              try:
+                  request_type = event['RequestType']
+                  properties = event['ResourceProperties']
+                  
+                  agent_name = properties.get('AgentName')
+                  agent_description = properties.get('AgentDescription')
+                  inference_profile_arn = properties.get('InferenceProfileArn')
+                  knowledge_base_id = properties.get('KnowledgeBaseId')
+                  guardrail_id = properties.get('GuardrailId')
+                  code_repository_search_lambda_arn = properties.get('CodeRepositorySearchLambdaArn')
+                  code_analysis_lambda_arn = properties.get('CodeAnalysisLambdaArn')
+                  document_search_lambda_arn = properties.get('DocumentSearchLambdaArn')
+                  s3_bucket_name = properties.get('S3BucketName')
+                  agent_role_arn = properties.get('AgentRoleArn')
+                  environment = properties.get('Environment')
+                  
+                  bedrock_agent_client = boto3.client('bedrock-agent')
+                  
+                  # Handle resource creation or update
+                  if request_type == 'Create' or request_type == 'Update':
+                      # Create or update agent
+                      print(f"Creating or updating agent {agent_name}...")
+                      
+                      try:
+                          # Check if agent already exists
+                          existing_agents = bedrock_agent_client.list_agents()
+                          
+                          agent_id = None
+                          alias_id = None
+                          
+                          for agent in existing_agents.get('agentSummaries', []):
+                              if agent.get('agentName') == agent_name:
+                                  agent_id = agent.get('agentId')
+                                  print(f"Found existing agent with ID: {agent_id}")
+                                  
+                                  # Get alias if it exists
+                                  aliases = bedrock_agent_client.list_agent_aliases(
+                                      agentId=agent_id
+                                  )
+                                  
+                                  for alias in aliases.get('agentAliasSummaries', []):
+                                      if alias.get('agentAliasName') == f"{agent_name}-alias":
+                                          alias_id = alias.get('agentAliasId')
+                                          print(f"Found existing alias with ID: {alias_id}")
+                                          break
+                                  
+                                  break
+                          
+                          # If agent doesn't exist, create it
+                          if not agent_id:
+                              # Create agent
+                              create_agent_response = bedrock_agent_client.create_agent(
+                                  agentName=agent_name,
+                                  description=agent_description,
+                                  instructionSourceConfiguration={
+                                      'sourceConfiguration': {
+                                          's3Configuration': {
+                                              's3BucketName': s3_bucket_name,
+                                              's3ObjectKey': 'instructions/coding-agent-instruction.md'
+                                          }
+                                      }
+                                  },
+                                  foundationModel=inference_profile_arn,
+                                  actionGroups=[
+                                      {
+                                          'actionGroupName': 'CodeAssistTools',
+                                          'description': 'Tools for code search, analysis, and documentation',
+                                          'actionGroupExecutor': {
+                                              'lambda': [
+                                                  {
+                                                      'actionName': 'CodeRepositorySearch',
+                                                      'description': 'Search code repositories for patterns or files',
+                                                      'lambdaArn': code_repository_search_lambda_arn,
+                                                      'parameterSchema': {
+                                                          'jsonSchema': {
+                                                              'type': 'object',
+                                                              'properties': {
+                                                                  'query': {
+                                                                      'type': 'string',
+                                                                      'description': 'The search query (e.g., function name, pattern)'
+                                                                  },
+                                                                  'repo_path': {
+                                                                      'type': 'string',
+                                                                      'description': 'Optional path to narrow the search'
+                                                                  },
+                                                                  'language': {
+                                                                      'type': 'string',
+                                                                      'description': 'Optional language filter (e.g., python, javascript)'
+                                                                  },
+                                                                  'max_results': {
+                                                                      'type': 'integer',
+                                                                      'description': 'Maximum number of results to return (default: 10)'
+                                                                  }
+                                                              },
+                                                              'required': ['query']
+                                                          }
+                                                      }
+                                                  },
+                                                  {
+                                                      'actionName': 'CodeAnalysis',
+                                                      'description': 'Analyze code to provide insights about structure and quality',
+                                                      'lambdaArn': code_analysis_lambda_arn,
+                                                      'parameterSchema': {
+                                                          'jsonSchema': {
+                                                              'type': 'object',
+                                                              'properties': {
+                                                                  'file_path': {
+                                                                      'type': 'string',
+                                                                      'description': 'Path to the file to analyze'
+                                                                  },
+                                                                  'language': {
+                                                                      'type': 'string',
+                                                                      'description': 'Language of the code (e.g., python, javascript)'
+                                                                  },
+                                                                  'analysis_type': {
+                                                                      'type': 'string',
+                                                                      'description': 'Type of analysis to perform (structure, quality, security, all)',
+                                                                      'enum': ['structure', 'quality', 'security', 'all']
+                                                                  }
+                                                              },
+                                                              'required': ['file_path']
+                                                          }
+                                                      }
+                                                  },
+                                                  {
+                                                      'actionName': 'DocumentSearch',
+                                                      'description': 'Search documentation for relevant information',
+                                                      'lambdaArn': document_search_lambda_arn,
+                                                      'parameterSchema': {
+                                                          'jsonSchema': {
+                                                              'type': 'object',
+                                                              'properties': {
+                                                                  'query': {
+                                                                      'type': 'string',
+                                                                      'description': 'The search query'
+                                                                  },
+                                                                  'doc_type': {
+                                                                      'type': 'string',
+                                                                      'description': 'Optional documentation type filter'
+                                                                  },
+                                                                  'max_results': {
+                                                                      'type': 'integer',
+                                                                      'description': 'Maximum number of results to return (default: 5)'
+                                                                  }
+                                                              },
+                                                              'required': ['query']
+                                                          }
+                                                      }
+                                                  }
+                                              ]
+                                          }
+                                      }
+                                  ],
+                                  customerEncryptionKeyArn='',
+                                  idleSessionTTLInSeconds=300,
+                                  roleArn=agent_role_arn,
+                                  knowledgeBases=[
+                                      {
+                                          'knowledgeBaseId': knowledge_base_id,
+                                          'description': 'Programming documentation and code examples'
+                                      }
+                                  ],
+                                  guardrailConfiguration={
+                                      'guardrailIdentifier': guardrail_id,
+                                      'guardrailVersion': 'DRAFT'
+                                  },
+                                  tags=[
+                                      {'key': 'Environment', 'value': environment},
+                                      {'key': 'Project', 'value': 'WebFG-Coding-Agent'}
+                                  ]
+                              )
+                              
+                              agent_id = create_agent_response.get('agent', {}).get('agentId')
+                              print(f"Created agent with ID: {agent_id}")
+                              
+                              # Prepare agent
+                              try:
+                                  prepare_response = bedrock_agent_client.prepare_agent(agentId=agent_id)
+                                  print(f"Prepare agent response: {prepare_response}")
+                              except Exception as e:
+                                  print(f"Error preparing agent: {str(e)}")
+                              
+                              # Wait for agent to be created and ready
+                              wait_time = 0
+                              max_wait = 60
+                              agent_ready = False
+                              
+                              while wait_time < max_wait and not agent_ready:
+                                  try:
+                                      agent_status = bedrock_agent_client.get_agent(
+                                          agentId=agent_id
+                                      ).get('agent', {}).get('agentStatus')
+                                      
+                                      if agent_status == 'READY':
+                                          agent_ready = True
+                                          print("Agent is ready")
+                                          break
+                                      
+                                      print(f"Agent status: {agent_status}, waiting...")
+                                      time.sleep(5)
+                                      wait_time += 5
+                                  except Exception as e:
+                                      print(f"Error checking agent status: {str(e)}")
+                                      time.sleep(5)
+                                      wait_time += 5
+                          
+                          # Create alias if it doesn't exist
+                          if not alias_id and agent_id:
+                              create_alias_response = bedrock_agent_client.create_agent_alias(
+                                  agentId=agent_id,
+                                  agentAliasName=f"{agent_name}-alias",
+                                  description=f"Agent alias for {environment} environment",
+                                  routingConfiguration=[
+                                      {'agentVersion': 'DRAFT'}
+                                  ],
+                                  tags=[
+                                      {'key': 'Environment', 'value': environment},
+                                      {'key': 'Project', 'value': 'WebFG-Coding-Agent'}
+                                  ]
+                              )
+                              
+                              alias_id = create_alias_response.get('agentAlias', {}).get('agentAliasId')
+                              print(f"Created agent alias with ID: {alias_id}")
+                          
+                          response_data['AgentId'] = agent_id
+                          response_data['AgentAliasId'] = alias_id
+                          response_data['AgentARN'] = f"arn:aws:bedrock:{context.invoked_function_arn.split(':')[3]}:{context.invoked_function_arn.split(':')[4]}:agent/{agent_id}"
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+                      
+                      except Exception as e:
+                          print(f"Error creating/updating agent: {str(e)}")
+                          cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+                  
+                  # Handle resource deletion
+                  elif request_type == 'Delete':
+                      try:
+                          # Check if agent exists
+                          existing_agents = bedrock_agent_client.list_agents()
+                          
+                          for agent in existing_agents.get('agentSummaries', []):
+                              if agent.get('agentName') == agent_name:
+                                  agent_id = agent.get('agentId')
+                                  print(f"Deleting agent with ID: {agent_id}")
+                                  
+                                  # Find and delete aliases first
+                                  aliases = bedrock_agent_client.list_agent_aliases(
+                                      agentId=agent_id
+                                  )
+                                  
+                                  for alias in aliases.get('agentAliasSummaries', []):
+                                      alias_id = alias.get('agentAliasId')
+                                      print(f"Deleting alias {alias_id}")
+                                      try:
+                                          bedrock_agent_client.delete_agent_alias(
+                                              agentId=agent_id,
+                                              agentAliasId=alias_id
+                                          )
+                                          print(f"Deleted alias {alias_id}")
+                                      except Exception as alias_e:
+                                          print(f"Error deleting alias: {str(alias_e)}")
+                                  
+                                  # Delete the agent
+                                  try:
+                                      bedrock_agent_client.delete_agent(agentId=agent_id)
+                                      print(f"Agent {agent_id} deleted successfully")
+                                  except Exception as agent_e:
+                                      print(f"Error deleting agent: {str(agent_e)}")
+                                  
+                                  break
+                          
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      
+                      except Exception as e:
+                          print(f"Error during agent deletion process: {str(e)}")
+                          # If the resource is already deleted, we still want to return success
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  else:
+                      cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': f'Unsupported request type: {request_type}'})
+                  
+              except Exception as e:
+                  print(f"Unexpected error: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
       Tags:
         - Key: Environment
           Value: !Ref Environment
         - Key: Project
           Value: WebFG-Coding-Agent
 
-  # Agent Alias for Production
-  CodingAgentAlias:
-    Type: AWS::Bedrock::AgentAlias
+  # IAM Role for agent creation Lambda
+  AgentCreationRole:
+    Type: AWS::IAM::Role
     Properties:
-      AgentAliasName: !Sub "coding-agent-alias-${Environment}"
-      AgentId: !GetAtt CodingAgent.AgentId
-      Description: !Sub "Coding Agent alias for ${Environment} environment"
-      RoutingConfiguration:
-        - AgentVersion: "DRAFT"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: BedrockAgentAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'bedrock-agent:CreateAgent'
+                  - 'bedrock-agent:CreateAgentAlias'
+                  - 'bedrock-agent:DeleteAgent'
+                  - 'bedrock-agent:DeleteAgentAlias'
+                  - 'bedrock-agent:GetAgent'
+                  - 'bedrock-agent:ListAgents'
+                  - 'bedrock-agent:ListAgentAliases'
+                  - 'bedrock-agent:PrepareAgent'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'iam:PassRole'
+                Resource: !GetAtt CodingAgentRole.Arn
       Tags:
         - Key: Environment
           Value: !Ref Environment
         - Key: Project
           Value: WebFG-Coding-Agent
 
-  # Slack App Resources
-  CodingAgentSlackApp:
-    Type: AWS::Serverless::Application
+  # Secret for Slack API tokens
+  SlackSecrets:
+    Type: AWS::SecretsManager::Secret
     Properties:
-      Location: ./slack-app.yaml
-      Parameters:
-        AgentId: !GetAtt CodingAgent.AgentId
-        AgentAliasId: !GetAtt CodingAgentAlias.AgentAliasId
-        Environment: !Ref Environment
+      Name: !Sub "coding-agent-slack-tokens-${Environment}"
+      Description: "Slack API tokens for Coding Agent"
+      SecretString: '{"SLACK_BOT_TOKEN":"<placeholder>","SLACK_SIGNING_SECRET":"<placeholder>","SLACK_APP_TOKEN":"<placeholder>"}'
       Tags:
-        Environment: !Ref Environment
-        Project: WebFG-Coding-Agent
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+  # IAM Role for Lambda integration
+  SlackIntegrationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: SlackIntegrationPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'secretsmanager:GetSecretValue'
+                Resource: !Ref SlackSecrets
+              - Effect: Allow
+                Action:
+                  - 'bedrock-agent-runtime:InvokeAgent'
+                Resource: !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:agent-alias/${CodingAgent.AgentId}/${CodingAgent.AgentAliasId}"
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+  # Lambda for Slack event handling
+  SlackEventHandlerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "coding-agent-slack-handler-${Environment}"
+      Handler: app.lambda_handler
+      Runtime: python3.10
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          AGENT_ID: !GetAtt CodingAgent.AgentId
+          AGENT_ALIAS_ID: !GetAtt CodingAgent.AgentAliasId
+          SLACK_TOKENS_SECRET: !Ref SlackSecrets
+      Role: !GetAtt SlackIntegrationRole.Arn
+      Code:
+        ZipFile: |
+          # This is a placeholder. The actual code will be deployed from a deployment package.
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': '{"status": "success", "message": "This is a placeholder. Please deploy the actual Lambda function code."}'
+              }
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+  # API Gateway for Slack integration
+  SlackApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "coding-agent-slack-api-${Environment}"
+      Description: "API Gateway for Slack integration with Coding Agent"
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: WebFG-Coding-Agent
+
+  # API Gateway Resource for Slack events
+  SlackEventsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref SlackApiGateway
+      ParentId: !GetAtt SlackApiGateway.RootResourceId
+      PathPart: "slack"
+
+  # API Gateway Resource for events endpoint
+  EventsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref SlackApiGateway
+      ParentId: !Ref SlackEventsResource
+      PathPart: "events"
+
+  # API Gateway Method for POST requests
+  EventsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref SlackApiGateway
+      ResourceId: !Ref EventsResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SlackEventHandlerFunction.Arn}/invocations"
+
+  # API Gateway Deployment
+  SlackApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - EventsMethod
+    Properties:
+      RestApiId: !Ref SlackApiGateway
+      StageName: !Ref Environment
+
+  # Lambda Permission for API Gateway
+  SlackLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref SlackEventHandlerFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${SlackApiGateway}/${Environment}/POST/slack/events"
 
 Outputs:
   AgentId:
@@ -334,7 +844,7 @@ Outputs:
 
   AgentAliasId:
     Description: ID of WebFG Coding Agent Alias
-    Value: !GetAtt CodingAgentAlias.AgentAliasId
+    Value: !GetAtt CodingAgent.AgentAliasId
     Export:
       Name: !Sub "${AWS::StackName}-AgentAliasId"
 
@@ -343,3 +853,9 @@ Outputs:
     Value: !GetAtt CodingAgentGuardrail.GuardrailId
     Export:
       Name: !Sub "${AWS::StackName}-GuardrailId"
+      
+  WebhookUrl:
+    Description: Webhook URL for Slack integration
+    Value: !Sub "https://${SlackApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/slack/events"
+    Export:
+      Name: !Sub "${AWS::StackName}-WebhookUrl"

@@ -62,9 +62,7 @@ fi
 # Delete inference profiles if requested
 if [ "$COMPONENT" = "all" ] || [ "$COMPONENT" = "profiles" ]; then
     echo "Deleting inference profiles..."
-    aws cloudformation delete-stack --stack-name coding-inference-profiles-$ENV
-    echo "Waiting for inference profiles stack deletion to complete..."
-    aws cloudformation wait stack-delete-complete --stack-name coding-inference-profiles-$ENV || true
+    bash "$SCRIPT_DIR/delete_inference_profile.sh" "$ENV"
 fi
 
 echo "Deletion completed successfully!"
