@@ -49,6 +49,10 @@ cleanup_virtualbox_vm() {
   echo ">>> Cleaning up local Vagrant state..."
   cleanup_local_vagrant_state
   
+  # Fix Vagrant global data permissions
+  echo ">>> Fixing Vagrant global data permissions..."
+  fix_vagrant_global_permissions
+  
   echo "✓ Cleanup complete."
   exit 0
 }
@@ -141,6 +145,34 @@ cleanup_local_vagrant_state() {
   fi
 }
 
+# Function to fix Vagrant global data permissions
+fix_vagrant_global_permissions() {
+  local VAGRANT_DATA_DIR="$HOME/.vagrant.d/data"
+  
+  if [ ! -d "$VAGRANT_DATA_DIR" ]; then
+    echo "No Vagrant data directory found at $VAGRANT_DATA_DIR"
+    return
+  fi
+  
+  # Check if any files are owned by root
+  ROOT_OWNED_FILES=$(find "$VAGRANT_DATA_DIR" -user 0 2>/dev/null | wc -l)
+  
+  if [ "$ROOT_OWNED_FILES" -gt 0 ]; then
+    echo "Found $ROOT_OWNED_FILES files owned by root in Vagrant data directory"
+    echo "Attempting to fix ownership..."
+    
+    # Try to change ownership to current user
+    if sudo chown -R "$(id -u):$(id -g)" "$VAGRANT_DATA_DIR" 2>/dev/null; then
+      echo "✓ Fixed Vagrant data directory ownership"
+    else
+      echo "Warning: Failed to fix Vagrant data directory ownership (no sudo access)"
+      echo "Manual fix required: sudo chown -R $(id -u):$(id -g) $VAGRANT_DATA_DIR"
+    fi
+  else
+    echo "Vagrant data directory permissions are correct"
+  fi
+}
+
 # Function to manually clean Vagrant machine index when prune fails
 manual_clean_vagrant_index() {
   local MACHINE_INDEX_FILE="$HOME/.vagrant.d/data/machine-index/index"
@@ -198,6 +230,10 @@ if DEV_USERNAME="$DEV_USERNAME" sudo -E vagrant destroy "$DEV_USERNAME" -f; then
     echo ">>> Cleaning up local Vagrant state..."
     cleanup_local_vagrant_state
     
+    # Fix Vagrant global data permissions
+    echo ">>> Fixing Vagrant global data permissions..."
+    fix_vagrant_global_permissions
+    
     echo "✓ Complete cleanup successful."
     exit 0 # Success
   fi
@@ -227,6 +263,10 @@ else
         # Also clean up local .vagrant state
         echo ">>> Cleaning up local Vagrant state..."
         cleanup_local_vagrant_state
+        
+        # Fix Vagrant global data permissions
+        echo ">>> Fixing Vagrant global data permissions..."
+        fix_vagrant_global_permissions
         
         echo "✓ Complete cleanup successful."
         exit 0 # Success
