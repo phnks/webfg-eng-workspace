@@ -30,11 +30,48 @@ if [ "$ENV" = "dev" ] || [ "$ENV" = "qa" ]; then
     KNOWLEDGE_BASE_TEMPLATE="resources-qa.yaml"
 fi
 
-aws cloudformation deploy \
+KNOWLEDGE_BASE_STACK_NAME="coding-agent-knowledge-base-$ENV"
+
+# Check if the stack exists and is in a failed state
+STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$KNOWLEDGE_BASE_STACK_NAME" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+
+if [[ "$STACK_STATUS" == "ROLLBACK_COMPLETE" || "$STACK_STATUS" == "CREATE_FAILED" || "$STACK_STATUS" == "UPDATE_ROLLBACK_COMPLETE" ]]; then
+    echo "Found knowledge base stack in $STACK_STATUS state. Deleting it before recreating..."
+    aws cloudformation delete-stack --stack-name "$KNOWLEDGE_BASE_STACK_NAME"
+    
+    echo "Waiting for stack deletion to complete..."
+    aws cloudformation wait stack-delete-complete --stack-name "$KNOWLEDGE_BASE_STACK_NAME"
+    
+    # If wait command fails, manual polling
+    if [ $? -ne 0 ]; then
+        echo "Stack deletion is taking longer than expected. Polling status..."
+        while true; do
+            CURRENT_STATUS=$(aws cloudformation describe-stacks --stack-name "$KNOWLEDGE_BASE_STACK_NAME" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "DELETE_COMPLETE")
+            if [[ "$CURRENT_STATUS" == "DELETE_COMPLETE" || "$CURRENT_STATUS" == "DOES_NOT_EXIST" ]]; then
+                echo "Stack deletion completed."
+                break
+            fi
+            echo "Stack status: $CURRENT_STATUS. Waiting..."
+            sleep 10
+        done
+    fi
+fi
+
+if ! aws cloudformation deploy \
     --template-file "$KNOWLEDGE_BASE_TEMPLATE" \
-    --stack-name coding-agent-knowledge-base-$ENV \
+    --stack-name "$KNOWLEDGE_BASE_STACK_NAME" \
     --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-    --parameter-overrides Environment=$ENV
+    --parameter-overrides Environment=$ENV; then
+    
+    echo "Failed to deploy knowledge base stack. Checking failure reason..."
+    aws cloudformation describe-stack-events \
+        --stack-name "$KNOWLEDGE_BASE_STACK_NAME" \
+        --query "StackEvents[?ResourceStatus=='CREATE_FAILED' || ResourceStatus=='UPDATE_FAILED'].{Resource:LogicalResourceId, Reason:ResourceStatusReason}" \
+        --output json
+    
+    echo "Knowledge base stack deployment failed. Aborting deployment."
+    exit 1
+fi
 
 # Step 3: Upload documentation files
 echo "Uploading documentation and instructions..."
@@ -96,15 +133,51 @@ fi
 INFERENCE_PROFILE_ARN=$(aws ssm get-parameter --name "/coding-agent/$ENV/inference-profile-arn" --query "Parameter.Value" --output text)
 EMBEDDING_PROFILE_ARN=$(aws ssm get-parameter --name "/coding-agent/$ENV/embedding-profile-arn" --query "Parameter.Value" --output text)
 
+AGENT_STACK_NAME="coding-agent-$ENV"
+
+# Check if the agent stack exists and is in a failed state
+STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$AGENT_STACK_NAME" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+
+if [[ "$STACK_STATUS" == "ROLLBACK_COMPLETE" || "$STACK_STATUS" == "CREATE_FAILED" || "$STACK_STATUS" == "UPDATE_ROLLBACK_COMPLETE" ]]; then
+    echo "Found agent stack in $STACK_STATUS state. Deleting it before recreating..."
+    aws cloudformation delete-stack --stack-name "$AGENT_STACK_NAME"
+    
+    echo "Waiting for stack deletion to complete..."
+    aws cloudformation wait stack-delete-complete --stack-name "$AGENT_STACK_NAME"
+    
+    # If wait command fails, manual polling
+    if [ $? -ne 0 ]; then
+        echo "Stack deletion is taking longer than expected. Polling status..."
+        while true; do
+            CURRENT_STATUS=$(aws cloudformation describe-stacks --stack-name "$AGENT_STACK_NAME" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "DELETE_COMPLETE")
+            if [[ "$CURRENT_STATUS" == "DELETE_COMPLETE" || "$CURRENT_STATUS" == "DOES_NOT_EXIST" ]]; then
+                echo "Stack deletion completed."
+                break
+            fi
+            echo "Stack status: $CURRENT_STATUS. Waiting..."
+            sleep 10
+        done
+    fi
+fi
+
 # Deploy agent CloudFormation stack with profile ARNs
-aws cloudformation deploy \
+if ! aws cloudformation deploy \
     --template-file "$AGENT_TEMPLATE" \
-    --stack-name coding-agent-$ENV \
+    --stack-name "$AGENT_STACK_NAME" \
     --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
     --parameter-overrides \
         Environment=$ENV \
         InferenceProfileArn=$INFERENCE_PROFILE_ARN \
-        KnowledgeBaseId=$KNOWLEDGE_BASE_ID
+        KnowledgeBaseId=$KNOWLEDGE_BASE_ID; then
+    
+    echo "Failed to deploy agent stack. Checking failure reason..."
+    aws cloudformation describe-stack-events \
+        --stack-name "$AGENT_STACK_NAME" \
+        --query "StackEvents[?ResourceStatus=='CREATE_FAILED' || ResourceStatus=='UPDATE_FAILED'].{Resource:LogicalResourceId, Reason:ResourceStatusReason}" \
+        --output json
+    
+    echo "Agent stack deployment failed. Continuing with Lambda function updates in case of partial success."
+fi
 
 # Update Lambda code after stack is created
 echo "Updating Lambda functions with actual code..."

@@ -104,19 +104,57 @@ if [[ "$DRY_RUN_MODE" == false ]]; then
         --value "$EMBEDDING_PROFILE_ARN" \
         --overwrite
 
-    echo "Creating CloudFormation stack for profile exports..."
+    echo "Setting up CloudFormation stack for profile exports..."
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     PARENT_DIR="$(dirname "$SCRIPT_DIR")"
     EXPORTS_TEMPLATE="$PARENT_DIR/inference-profiles/exports.yaml"
+    STACK_NAME="coding-inference-profiles-$ENV"
     
-    aws cloudformation deploy \
+    # Check if the stack exists and is in a failed state
+    STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+    
+    if [[ "$STACK_STATUS" == "ROLLBACK_COMPLETE" || "$STACK_STATUS" == "CREATE_FAILED" || "$STACK_STATUS" == "UPDATE_ROLLBACK_COMPLETE" ]]; then
+        echo "Found stack in $STACK_STATUS state. Deleting it before recreating..."
+        aws cloudformation delete-stack --stack-name "$STACK_NAME"
+        
+        echo "Waiting for stack deletion to complete..."
+        aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME"
+        
+        # If wait command fails, manual polling
+        if [ $? -ne 0 ]; then
+            echo "Stack deletion is taking longer than expected. Polling status..."
+            while true; do
+                CURRENT_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "DELETE_COMPLETE")
+                if [[ "$CURRENT_STATUS" == "DELETE_COMPLETE" || "$CURRENT_STATUS" == "DOES_NOT_EXIST" ]]; then
+                    echo "Stack deletion completed."
+                    break
+                fi
+                echo "Stack status: $CURRENT_STATUS. Waiting..."
+                sleep 10
+            done
+        fi
+    fi
+    
+    echo "Deploying CloudFormation stack for profile exports..."
+    if ! aws cloudformation deploy \
         --template-file "$EXPORTS_TEMPLATE" \
-        --stack-name "coding-inference-profiles-$ENV" \
+        --stack-name "$STACK_NAME" \
         --capabilities CAPABILITY_IAM \
         --parameter-overrides \
             Environment=$ENV \
             MainProfileArn=$MAIN_PROFILE_ARN \
-            EmbeddingProfileArn=$EMBEDDING_PROFILE_ARN
+            EmbeddingProfileArn=$EMBEDDING_PROFILE_ARN; then
+            
+        echo "Failed to create CloudFormation exports stack. Checking failure reason..."
+        aws cloudformation describe-stack-events \
+            --stack-name "$STACK_NAME" \
+            --query "StackEvents[?ResourceStatus=='CREATE_FAILED' || ResourceStatus=='UPDATE_FAILED'].{Resource:LogicalResourceId, Reason:ResourceStatusReason}" \
+            --output json
+        
+        echo "CloudFormation exports creation failed. Continuing with deployment, but dependent resources may fail."
+    else
+        echo "CloudFormation exports created successfully."
+    fi
 
     echo "Inference profiles created and ARNs stored in SSM parameters and CloudFormation exports."
 else
