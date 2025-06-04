@@ -19,13 +19,23 @@ echo "✅ Successfully listed foundation models"
 
 # Check if specific models we need are available
 echo "Checking required models..."
-aws bedrock list-foundation-models --query "modelSummaries[?modelId=='anthropic.claude-opus-4-20250514-v1:0' || modelId=='amazon.titan-embed-text-v2:0'].modelId" --output text
+aws bedrock list-foundation-models --query "modelSummaries[?modelId=='amazon.titan-embed-text-v2:0'].modelId" --output text
 
 if [ $? -ne 0 ]; then
-    echo "❌ Failed to check for required models"
+    echo "❌ Failed to check for required embedding model"
     exit 1
 fi
-echo "✅ Successfully checked model availability"
+echo "✅ Successfully checked embedding model availability"
+
+# Check if system-provided Claude Opus 4 inference profile is available
+echo "Checking system-provided Claude Opus 4 inference profile..."
+aws bedrock list-inference-profiles --region us-east-1 --query "inferenceProfileSummaries[?contains(inferenceProfileName,'claude-opus-4')].inferenceProfileName" --output text
+
+if [ $? -ne 0 ]; then
+    echo "❌ Failed to check for Claude Opus 4 system inference profile"
+    exit 1
+fi
+echo "✅ Successfully verified Claude Opus 4 system inference profile is available"
 
 # Test SSM parameter store access
 echo "Testing SSM parameter store access..."

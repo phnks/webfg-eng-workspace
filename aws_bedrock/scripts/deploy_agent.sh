@@ -18,8 +18,8 @@ fi
 
 echo "Deploying WebFG Coding Agent to $ENV environment..."
 
-# Step 1: Create inference profiles using direct API calls
-echo "Creating inference profiles..."
+# Step 1: Set up inference profiles (using system profile for Claude Opus 4)
+echo "Setting up inference profiles..."
 bash "$SCRIPT_DIR/create_inference_profile.sh" "$ENV"
 
 # Step 2: Deploy knowledge base CloudFormation stack

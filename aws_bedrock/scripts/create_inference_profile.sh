@@ -13,9 +13,10 @@ DRY_RUN=${2:-""}
 # Check if --dry-run flag is set
 if [[ "$DRY_RUN" == "--dry-run" ]]; then
     echo "Running in dry-run mode. Will validate but not create resources."
-    DRY_RUN_FLAG="--dry-run"
+    # Note: AWS CLI doesn't accept --dry-run directly, so we'll use a flag to skip creation
+    DRY_RUN_MODE=true
 else
-    DRY_RUN_FLAG=""
+    DRY_RUN_MODE=false
 fi
 
 # Validate environment parameter
@@ -24,50 +25,42 @@ if [[ ! "$ENV" =~ ^(dev|qa|prod|test)$ ]]; then
     exit 1
 fi
 
-echo "Creating inference profiles for $ENV environment..."
+echo "Setting up inference profiles for $ENV environment..."
 
 # Set model ARN based on environment
-# Using the direct Claude Opus 4 foundation model ARN
-# Note: Claude Opus 4 only supports INFERENCE_PROFILE type, not ON_DEMAND
-MODEL_ARN="arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-opus-4-20250514-v1:0"  # Using Claude Opus 4 model ARN
+# Using the AWS-provided system inference profile for Claude Opus 4
+# System-provided inference profiles are required for models that only support INFERENCE_PROFILE type
+# These profiles route to multiple regions for better availability
+SYSTEM_PROFILE_ARN="arn:aws:bedrock:us-east-1:507323066541:inference-profile/us.anthropic.claude-opus-4-20250514-v1:0"  # Using Claude Opus 4 system inference profile
 # For embedding model, we need one that supports ON_DEMAND type
 EMBEDDING_MODEL_ARN="arn:aws:bedrock:us-west-2::foundation-model/amazon.titan-embed-text-v2:0"  # Using Titan Embed Text for embeddings (supports ON_DEMAND)
 
 # Note: Claude Opus 4 only supports INFERENCE_PROFILE and not ON_DEMAND
 
-# Create a custom inference profile for Claude Opus 4
-MAIN_PROFILE_NAME="coding-agent-inference-profile-${ENV}"
-echo "Creating custom inference profile: $MAIN_PROFILE_NAME"
+# Use the system-provided inference profile directly instead of creating a new one
+MAIN_PROFILE_NAME="us.anthropic.claude-opus-4-20250514-v1:0"
+echo "Using system-provided inference profile: $MAIN_PROFILE_NAME"
 
-# Create inference profile for Claude Opus 4
-aws bedrock create-inference-profile \
-    --inference-profile-name "$MAIN_PROFILE_NAME" \
-    --model-source copyFrom="$MODEL_ARN" \
-    --tags "[{\"key\":\"Environment\",\"value\":\"$ENV\"},{\"key\":\"Project\",\"value\":\"WebFG-Coding-Agent\"}]" \
-    $DRY_RUN_FLAG
-
-# Get the main inference profile ARN if not in dry-run mode
-if [[ "$DRY_RUN" != "--dry-run" ]]; then
-    MAIN_PROFILE_ARN=$(aws bedrock list-inference-profiles --query "inferenceProfileSummaries[?inferenceProfileName=='$MAIN_PROFILE_NAME'].inferenceProfileArn" --output text)
-    echo "Created main inference profile with ARN: $MAIN_PROFILE_ARN"
-else
-    echo "[Dry run] Would create main inference profile: $MAIN_PROFILE_NAME"
-    # Use a placeholder ARN for dry run
-    MAIN_PROFILE_ARN="arn:aws:bedrock:us-west-2:123456789012:inference-profile/sample-profile-id"
-fi
+# Store the system inference profile ARN directly
+MAIN_PROFILE_ARN="$SYSTEM_PROFILE_ARN"
+echo "Using system inference profile ARN: $MAIN_PROFILE_ARN"
 
 # Create embedding profile
 EMBEDDING_PROFILE_NAME="coding-agent-embedding-profile-${ENV}"
 echo "Creating embedding profile: $EMBEDDING_PROFILE_NAME"
 
-aws bedrock create-inference-profile \
-    --inference-profile-name "$EMBEDDING_PROFILE_NAME" \
-    --model-source copyFrom="$EMBEDDING_MODEL_ARN" \
-    --tags "[{\"key\":\"Environment\",\"value\":\"$ENV\"},{\"key\":\"Project\",\"value\":\"WebFG-Coding-Agent\"}]" \
-    $DRY_RUN_FLAG
+if [[ "$DRY_RUN_MODE" == false ]]; then
+    # Only create the profile if not in dry-run mode
+    aws bedrock create-inference-profile \
+        --inference-profile-name "$EMBEDDING_PROFILE_NAME" \
+        --model-source copyFrom="$EMBEDDING_MODEL_ARN" \
+        --tags "[{\"key\":\"Environment\",\"value\":\"$ENV\"},{\"key\":\"Project\",\"value\":\"WebFG-Coding-Agent\"}]"
+else
+    echo "[Dry run] Would create embedding profile with command: aws bedrock create-inference-profile --inference-profile-name $EMBEDDING_PROFILE_NAME --model-source copyFrom=$EMBEDDING_MODEL_ARN"
+fi
 
 # Get the embedding profile ARN if not in dry-run mode
-if [[ "$DRY_RUN" != "--dry-run" ]]; then
+if [[ "$DRY_RUN_MODE" == false ]]; then
     EMBEDDING_PROFILE_ARN=$(aws bedrock list-inference-profiles --query "inferenceProfileSummaries[?inferenceProfileName=='$EMBEDDING_PROFILE_NAME'].inferenceProfileArn" --output text)
     echo "Created embedding profile with ARN: $EMBEDDING_PROFILE_ARN"
 else
@@ -77,7 +70,7 @@ else
 fi
 
 # Store profile ARNs in SSM for reference by other resources
-if [[ "$DRY_RUN" != "--dry-run" ]]; then
+if [[ "$DRY_RUN_MODE" == false ]]; then
     aws ssm put-parameter \
         --name "/coding-agent/$ENV/inference-profile-arn" \
         --type "String" \
