@@ -92,10 +92,8 @@ Resources:
         OpensearchServerlessConfiguration:
           CollectionArn: !GetAtt CodingAgentCollection.Arn
       Tags:
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Project
-          Value: WebFG-Coding-Agent
+        Environment: !Ref Environment
+        Project: "WebFG-Coding-Agent"
 
   # OpenSearch Serverless Collection for Knowledge Base
   CodingAgentCollection:
@@ -114,7 +112,7 @@ Resources:
   CodingAgentAccessPolicy:
     Type: AWS::OpenSearchServerless::AccessPolicy
     Properties:
-      Name: !Sub "coding-agent-kb-access-policy-${Environment}"
+      Name: !Sub "kb-access-${Environment}"
       Type: 'data'
       Description: 'Access policy for Coding Agent KB'
       Policy: !Sub |
@@ -141,12 +139,6 @@ Resources:
             - !Ref DataSourcePath
       Name: !Sub "coding-agent-docs-${Environment}"
       KnowledgeBaseId: !GetAtt CodingAgentKnowledgeBase.KnowledgeBaseId
-      DataDeletionPolicy: DELETE_INGESTED_DATA
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Project
-          Value: WebFG-Coding-Agent
 
 Outputs:
   KnowledgeBaseId:
