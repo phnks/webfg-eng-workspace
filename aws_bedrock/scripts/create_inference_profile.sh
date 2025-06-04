@@ -91,6 +91,7 @@ fi
 
 # Store profile ARNs in SSM for reference by other resources
 if [[ "$DRY_RUN_MODE" == false ]]; then
+    echo "Storing inference profile ARNs in SSM parameters..."
     aws ssm put-parameter \
         --name "/coding-agent/$ENV/inference-profile-arn" \
         --type "String" \
@@ -103,9 +104,24 @@ if [[ "$DRY_RUN_MODE" == false ]]; then
         --value "$EMBEDDING_PROFILE_ARN" \
         --overwrite
 
-    echo "Inference profiles created and ARNs stored in SSM parameters."
+    echo "Creating CloudFormation stack for profile exports..."
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    PARENT_DIR="$(dirname "$SCRIPT_DIR")"
+    EXPORTS_TEMPLATE="$PARENT_DIR/inference-profiles/exports.yaml"
+    
+    aws cloudformation deploy \
+        --template-file "$EXPORTS_TEMPLATE" \
+        --stack-name "coding-inference-profiles-$ENV" \
+        --capabilities CAPABILITY_IAM \
+        --parameter-overrides \
+            Environment=$ENV \
+            MainProfileArn=$MAIN_PROFILE_ARN \
+            EmbeddingProfileArn=$EMBEDDING_PROFILE_ARN
+
+    echo "Inference profiles created and ARNs stored in SSM parameters and CloudFormation exports."
 else
     echo "[Dry run] Would store the following SSM parameters:"
     echo "  - /coding-agent/$ENV/inference-profile-arn: $MAIN_PROFILE_ARN"
     echo "  - /coding-agent/$ENV/embedding-profile-arn: $EMBEDDING_PROFILE_ARN"
+    echo "[Dry run] Would create CloudFormation stack: coding-inference-profiles-$ENV"
 fi

@@ -27,13 +27,22 @@ fi
 echo "✅ Bedrock API test passed."
 
 # Step 2: Test inference profile creation in dry-run mode
-echo "2. Testing inference profile creation in dry-run mode..."
+echo "2. Testing inference profile creation and CloudFormation exports in dry-run mode..."
 $PARENT_DIR/scripts/create_inference_profile.sh $ENV --dry-run
 if [ $? -ne 0 ]; then
     echo "❌ Inference profile creation test failed."
     exit 1
 fi
-echo "✅ Inference profile creation test passed."
+
+# Validate the CloudFormation template for exports
+echo "Validating CloudFormation template for exports..."
+aws cloudformation validate-template --template-body file://$PARENT_DIR/inference-profiles/exports.yaml > /dev/null
+if [ $? -ne 0 ]; then
+    echo "❌ Exports CloudFormation template validation failed."
+    exit 1
+fi
+
+echo "✅ Inference profile creation and exports test passed."
 
 # Step 3: Test full deployment using dry-run on CloudFormation
 echo "3. Testing full deployment process (simulated)..."

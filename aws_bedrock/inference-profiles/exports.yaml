@@ -1,0 +1,53 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation exports for WebFG Coding Agent inference profiles'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, qa, prod, test]
+    Description: Environment for deployment
+    
+  MainProfileArn:
+    Type: String
+    Description: ARN of the main inference profile
+  
+  EmbeddingProfileArn:
+    Type: String
+    Description: ARN of the embedding inference profile
+
+Resources:
+  MainProfileArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/coding-agent/${Environment}/inference-profile-arn"
+      Type: String
+      Value: !Ref MainProfileArn
+      Description: !Sub "Main inference profile ARN for coding-agent-${Environment}"
+      Tags:
+        Environment: !Ref Environment
+        Project: WebFG-Coding-Agent
+  
+  EmbeddingProfileArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/coding-agent/${Environment}/embedding-profile-arn"
+      Type: String
+      Value: !Ref EmbeddingProfileArn
+      Description: !Sub "Embedding profile ARN for coding-agent-${Environment}"
+      Tags:
+        Environment: !Ref Environment
+        Project: WebFG-Coding-Agent
+
+Outputs:
+  MainProfileArn:
+    Description: ARN of the main inference profile
+    Value: !Ref MainProfileArn
+    Export:
+      Name: !Sub "coding-inference-profiles-${Environment}-MainProfileArn"
+  
+  EmbeddingProfileArn:
+    Description: ARN of the embedding inference profile
+    Value: !Ref EmbeddingProfileArn
+    Export:
+      Name: !Sub "coding-inference-profiles-${Environment}-EmbeddingProfileArn"
