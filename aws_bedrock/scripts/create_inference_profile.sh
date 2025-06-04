@@ -61,7 +61,27 @@ fi
 
 # Get the embedding profile ARN if not in dry-run mode
 if [[ "$DRY_RUN_MODE" == false ]]; then
+    # Wait a moment for the profile to be available in the list
+    echo "Waiting for embedding profile to be available..."
+    sleep 5
+    
+    # Fetch the profile ARN
     EMBEDDING_PROFILE_ARN=$(aws bedrock list-inference-profiles --query "inferenceProfileSummaries[?inferenceProfileName=='$EMBEDDING_PROFILE_NAME'].inferenceProfileArn" --output text)
+    
+    # Check if the ARN is empty and retry if needed
+    if [[ -z "$EMBEDDING_PROFILE_ARN" ]]; then
+        echo "Profile ARN not found on first attempt, retrying..."
+        sleep 10
+        EMBEDDING_PROFILE_ARN=$(aws bedrock list-inference-profiles --query "inferenceProfileSummaries[?inferenceProfileName=='$EMBEDDING_PROFILE_NAME'].inferenceProfileArn" --output text)
+    fi
+    
+    # Verify that we have a valid ARN
+    if [[ -z "$EMBEDDING_PROFILE_ARN" ]]; then
+        echo "Error: Failed to retrieve embedding profile ARN. Using profile name as fallback."
+        # Use the profile name as the ARN as a fallback
+        EMBEDDING_PROFILE_ARN="arn:aws:bedrock:us-west-2:$(aws sts get-caller-identity --query 'Account' --output text):inference-profile/$EMBEDDING_PROFILE_NAME"
+    fi
+    
     echo "Created embedding profile with ARN: $EMBEDDING_PROFILE_ARN"
 else
     echo "[Dry run] Would create embedding profile: $EMBEDDING_PROFILE_NAME"
