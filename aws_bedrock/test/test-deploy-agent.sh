@@ -8,7 +8,6 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 ENV=${1:-dev}
-NO_PUSH="--no-push"  # Always skip pushing in the test script
 
 # Validate environment parameter
 if [[ ! "$ENV" =~ ^(dev|qa|prod)$ ]]; then

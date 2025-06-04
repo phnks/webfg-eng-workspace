@@ -1,21 +1,14 @@
 #!/bin/bash
 
 # Deploy AWS Bedrock agent and related resources
-# Usage: ./deploy_agent.sh [environment] [--no-push]
+# Usage: ./deploy_agent.sh [environment]
 # Environment options: dev, qa, prod (default: dev)
-# Use --no-push to skip pushing changes to git
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 ENV=${1:-dev}
-PUSH_CHANGES=true
-
-# Check for --no-push flag
-if [[ "$2" == "--no-push" ]]; then
-    PUSH_CHANGES=false
-fi
 
 # Validate environment parameter
 if [[ ! "$ENV" =~ ^(dev|qa|prod)$ ]]; then
@@ -213,36 +206,4 @@ if [ ! -z "$WEBHOOK_URL" ]; then
     echo ""
     echo "Slack Webhook URL: $WEBHOOK_URL"
     echo "You need to configure this URL in your Slack app settings."
-fi
-
-# Push changes to git if requested
-if [ "$PUSH_CHANGES" = true ]; then
-    echo ""
-    echo "Pushing changes to git..."
-    
-    # Get the current branch
-    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-    
-    # Check for changes
-    if git diff-index --quiet HEAD --; then
-        echo "No changes to commit."
-    else
-        # Prompt for commit message
-        echo "Please enter a commit message for changes (press Enter to use default):"
-        read -t 30 COMMIT_MSG
-        
-        if [ -z "$COMMIT_MSG" ]; then
-            COMMIT_MSG="Update AWS Bedrock agent configuration for $ENV environment"
-        fi
-        
-        # Add and commit changes
-        git add "$PARENT_DIR"
-        git commit -m "$COMMIT_MSG"
-        
-        # Push changes
-        echo "Pushing changes to origin/$CURRENT_BRANCH..."
-        git push origin "$CURRENT_BRANCH"
-        
-        echo "Changes pushed successfully."
-    fi
 fi
