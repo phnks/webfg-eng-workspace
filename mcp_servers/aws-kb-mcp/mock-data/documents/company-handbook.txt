@@ -1,0 +1,82 @@
+COMPANY HANDBOOK - TECHCORP SOLUTIONS
+
+=== OVERVIEW ===
+
+TechCorp Solutions is a leading technology company specializing in cloud computing, artificial intelligence, and enterprise software solutions. Founded in 2015, we serve over 10,000 customers worldwide.
+
+=== COMPANY VALUES ===
+
+1. Innovation First
+   - We prioritize cutting-edge solutions
+   - Continuous learning and development
+   - Risk-taking and experimentation
+
+2. Customer Success
+   - Customer satisfaction is our top priority
+   - 24/7 support availability
+   - Personalized service approach
+
+3. Team Collaboration
+   - Open communication culture
+   - Cross-functional teamwork
+   - Inclusive decision-making
+
+=== EMPLOYEE BENEFITS ===
+
+Health & Wellness:
+- Comprehensive health insurance (medical, dental, vision)
+- Mental health support and counseling services
+- Gym membership reimbursement up to $500/year
+- Flexible work hours and remote work options
+
+Professional Development:
+- Annual learning budget of $2,000 per employee
+- Conference attendance support
+- Internal mentorship programs
+- Skills certification reimbursement
+
+Time Off:
+- 25 days paid vacation annually
+- 10 sick days per year
+- Parental leave: 16 weeks paid
+- Sabbatical program after 5 years
+
+=== OFFICE POLICIES ===
+
+Work Environment:
+- Open office concept with collaboration spaces
+- Quiet zones for focused work
+- Modern equipment and technology provided
+- Free snacks, coffee, and catered lunch on Fridays
+
+Dress Code:
+- Business casual standard
+- Casual Fridays allowed
+- Client meeting days require business attire
+
+=== TECHNOLOGY STACK ===
+
+Our primary technology platforms include:
+- Cloud: AWS, Azure, Google Cloud Platform
+- Programming: Python, JavaScript, Java, Go
+- Databases: PostgreSQL, MongoDB, Redis
+- DevOps: Docker, Kubernetes, Jenkins, GitLab
+- AI/ML: TensorFlow, PyTorch, Scikit-learn
+
+=== CONTACT INFORMATION ===
+
+Headquarters:
+TechCorp Solutions
+123 Innovation Drive
+Tech City, TC 12345
+Phone: (555) 123-4567
+Email: info@techcorp-solutions.com
+
+HR Department:
+Email: hr@techcorp-solutions.com
+Phone: (555) 123-4568
+
+IT Support:
+Email: support@techcorp-solutions.com
+Phone: (555) 123-4569
+Available: Monday-Friday, 8 AM - 6 PM PST
