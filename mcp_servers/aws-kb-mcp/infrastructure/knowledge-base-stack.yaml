@@ -1,0 +1,274 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Knowledge Base with OpenSearch Serverless and S3 for MCP Server'
+
+Parameters:
+  KnowledgeBaseName:
+    Type: String
+    Default: 'mcp-knowledge-base'
+    Description: 'Name for the Knowledge Base'
+  
+  BucketName:
+    Type: String
+    Default: 'mcp-kb-documents'
+    Description: 'S3 bucket name for documents (must be globally unique)'
+  
+  CollectionName:
+    Type: String
+    Default: 'mcp-kb-collection'
+    Description: 'OpenSearch Serverless collection name'
+
+Resources:
+  # S3 Bucket for document storage
+  DocumentsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${BucketName}-${AWS::AccountId}-${AWS::Region}'
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      NotificationConfiguration:
+        CloudWatchConfigurations:
+          - Event: s3:ObjectCreated:*
+            CloudWatchConfiguration:
+              LogGroupName: !Ref DocumentsLogGroup
+
+  # CloudWatch Log Group for S3 events
+  DocumentsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/s3/${BucketName}-${AWS::AccountId}-${AWS::Region}'
+      RetentionInDays: 30
+
+  # IAM Role for Bedrock Knowledge Base
+  BedrockKnowledgeBaseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${KnowledgeBaseName}-bedrock-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+      Policies:
+        - PolicyName: S3AccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt DocumentsBucket.Arn
+                  - !Sub '${DocumentsBucket.Arn}/*'
+        - PolicyName: OpenSearchServerlessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - aoss:CreateCollection
+                  - aoss:DeleteCollection
+                  - aoss:UpdateCollection
+                  - aoss:BatchGetCollection
+                  - aoss:ListCollections
+                  - aoss:CreateAccessPolicy
+                  - aoss:UpdateAccessPolicy
+                  - aoss:GetAccessPolicy
+                  - aoss:ListAccessPolicies
+                  - aoss:CreateSecurityPolicy
+                  - aoss:UpdateSecurityPolicy
+                  - aoss:GetSecurityPolicy
+                  - aoss:ListSecurityPolicies
+                  - aoss:APIAccessAll
+                Resource: '*'
+
+  # OpenSearch Serverless Security Policy (Network)
+  OpenSearchNetworkPolicy:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
+    Properties:
+      Name: !Sub '${CollectionName}-network-policy'
+      Type: network
+      Policy: !Sub |
+        [
+          {
+            "Rules": [
+              {
+                "Resource": [
+                  "collection/${CollectionName}"
+                ],
+                "ResourceType": "collection"
+              },
+              {
+                "Resource": [
+                  "collection/${CollectionName}"
+                ],
+                "ResourceType": "dashboard"
+              }
+            ],
+            "AllowFromPublic": true
+          }
+        ]
+
+  # OpenSearch Serverless Security Policy (Encryption)
+  OpenSearchEncryptionPolicy:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
+    Properties:
+      Name: !Sub '${CollectionName}-encryption-policy'
+      Type: encryption
+      Policy: !Sub |
+        {
+          "Rules": [
+            {
+              "Resource": [
+                "collection/${CollectionName}"
+              ],
+              "ResourceType": "collection"
+            }
+          ],
+          "AWSOwnedKey": true
+        }
+
+  # OpenSearch Serverless Access Policy
+  OpenSearchAccessPolicy:
+    Type: AWS::OpenSearchServerless::AccessPolicy
+    Properties:
+      Name: !Sub '${CollectionName}-access-policy'
+      Type: data
+      Policy: !Sub |
+        [
+          {
+            "Rules": [
+              {
+                "Resource": [
+                  "collection/${CollectionName}"
+                ],
+                "Permission": [
+                  "aoss:CreateCollectionItems",
+                  "aoss:DeleteCollectionItems",
+                  "aoss:UpdateCollectionItems",
+                  "aoss:DescribeCollectionItems"
+                ],
+                "ResourceType": "collection"
+              },
+              {
+                "Resource": [
+                  "index/${CollectionName}/*"
+                ],
+                "Permission": [
+                  "aoss:CreateIndex",
+                  "aoss:DeleteIndex",
+                  "aoss:UpdateIndex",
+                  "aoss:DescribeIndex",
+                  "aoss:ReadDocument",
+                  "aoss:WriteDocument"
+                ],
+                "ResourceType": "index"
+              }
+            ],
+            "Principal": [
+              "${BedrockKnowledgeBaseRole.Arn}",
+              "${AWS::AccountId}"
+            ]
+          }
+        ]
+
+  # OpenSearch Serverless Collection
+  OpenSearchCollection:
+    Type: AWS::OpenSearchServerless::Collection
+    DependsOn:
+      - OpenSearchNetworkPolicy
+      - OpenSearchEncryptionPolicy
+      - OpenSearchAccessPolicy
+    Properties:
+      Name: !Ref CollectionName
+      Type: VECTORSEARCH
+      Description: 'OpenSearch collection for Knowledge Base vector storage'
+
+  # Bedrock Knowledge Base
+  KnowledgeBase:
+    Type: AWS::Bedrock::KnowledgeBase
+    DependsOn: OpenSearchCollection
+    Properties:
+      Name: !Ref KnowledgeBaseName
+      Description: 'Knowledge Base for MCP Server with mock data'
+      RoleArn: !GetAtt BedrockKnowledgeBaseRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: VECTOR
+        VectorKnowledgeBaseConfiguration:
+          EmbeddingModelArn: !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v1'
+      StorageConfiguration:
+        Type: OPENSEARCH_SERVERLESS
+        OpensearchServerlessConfiguration:
+          CollectionArn: !GetAtt OpenSearchCollection.Arn
+          VectorIndexName: 'knowledge-base-index'
+          FieldMapping:
+            VectorField: 'vector'
+            TextField: 'text'
+            MetadataField: 'metadata'
+      Tags:
+        - Key: 'mcp-multirag-kb'
+          Value: 'true'
+        - Key: 'Environment'
+          Value: 'development'
+        - Key: 'Project'
+          Value: 'MCP-Knowledge-Base'
+
+  # Data Source for S3 Bucket
+  KnowledgeBaseDataSource:
+    Type: AWS::Bedrock::DataSource
+    Properties:
+      KnowledgeBaseId: !Ref KnowledgeBase
+      Name: 'S3-Documents-DataSource'
+      Description: 'S3 bucket data source for Knowledge Base'
+      DataSourceConfiguration:
+        Type: S3
+        S3Configuration:
+          BucketArn: !GetAtt DocumentsBucket.Arn
+          InclusionPrefixes:
+            - 'documents/'
+      VectorIngestionConfiguration:
+        ChunkingConfiguration:
+          ChunkingStrategy: FIXED_SIZE
+          FixedSizeChunkingConfiguration:
+            MaxTokens: 512
+            OverlapPercentage: 20
+
+Outputs:
+  KnowledgeBaseId:
+    Description: 'ID of the created Knowledge Base'
+    Value: !Ref KnowledgeBase
+    Export:
+      Name: !Sub '${AWS::StackName}-KnowledgeBaseId'
+
+  DataSourceId:
+    Description: 'ID of the created Data Source'
+    Value: !Ref KnowledgeBaseDataSource
+    Export:
+      Name: !Sub '${AWS::StackName}-DataSourceId'
+
+  S3BucketName:
+    Description: 'Name of the S3 bucket for documents'
+    Value: !Ref DocumentsBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-S3BucketName'
+
+  OpenSearchCollectionEndpoint:
+    Description: 'OpenSearch Serverless collection endpoint'
+    Value: !GetAtt OpenSearchCollection.CollectionEndpoint
+    Export:
+      Name: !Sub '${AWS::StackName}-OpenSearchEndpoint'
+
+  KnowledgeBaseArn:
+    Description: 'ARN of the Knowledge Base'
+    Value: !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${KnowledgeBase}'
+    Export:
+      Name: !Sub '${AWS::StackName}-KnowledgeBaseArn'
